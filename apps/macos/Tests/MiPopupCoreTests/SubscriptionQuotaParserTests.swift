@@ -17,6 +17,9 @@ struct SubscriptionQuotaParserTests {
         #expect(snapshot.windows[0].remainingPercent == 80)
         #expect(snapshot.windows[0].resetsAt == Date(timeIntervalSince1970: 1_784_610_708))
         #expect(snapshot.fetchedAt == fetchedAt)
+
+        let cachedData = try JSONEncoder().encode(snapshot)
+        #expect(try JSONDecoder().decode(SubscriptionQuotaSnapshot.self, from: cachedData) == snapshot)
     }
 
     @Test

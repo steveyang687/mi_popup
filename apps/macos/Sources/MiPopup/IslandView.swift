@@ -87,7 +87,7 @@ struct IslandView: View {
                     .padding(.horizontal, 16)
                 }
             }
-            .frame(height: 38)
+            .frame(height: model.expanded ? 38 : model.collapsedHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -367,7 +367,7 @@ struct IslandView: View {
                     .lineLimit(4)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("正在读取本机登录状态…")
+                Text(state.id == .openAI ? "正在读取 Codex 订阅额度…" : "正在读取 Google 订阅额度…")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.white.opacity(0.45))
             }

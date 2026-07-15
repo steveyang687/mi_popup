@@ -42,6 +42,7 @@ final class IslandViewModel: ObservableObject {
     @Published var latestText = "配送状态解析将在采样后启用"
     @Published var hasError = false
     @Published var notchReservedWidth: CGFloat = 0
+    @Published var collapsedHeight: CGFloat = 38
     @Published var quotaStates = SubscriptionProviderID.allCases.map {
         ProviderQuotaDisplayState(id: $0, snapshot: nil, errorMessage: nil, isLoading: true)
     }

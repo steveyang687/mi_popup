@@ -35,6 +35,7 @@ final class NotchPanelController: NSWindowController {
         self.init(window: panel)
         configure(panel)
         installContent(in: panel)
+        restoreCachedQuotaSnapshots()
         startQuotaRefreshLoop()
     }
 
@@ -233,6 +234,7 @@ final class NotchPanelController: NSWindowController {
 
             for await outcome in group {
                 if let snapshot = outcome.snapshot {
+                    QuotaSnapshotCache.save(snapshot)
                     model.apply(snapshot: snapshot)
                     #if DEBUG
                     print("AI quota updated: \(snapshot.provider.displayName), \(snapshot.windows.count) windows")
@@ -249,6 +251,13 @@ final class NotchPanelController: NSWindowController {
             }
         }
         model.finishQuotaRefresh()
+    }
+
+    private func restoreCachedQuotaSnapshots() {
+        for provider in SubscriptionProviderID.allCases {
+            guard let snapshot = QuotaSnapshotCache.load(provider: provider) else { continue }
+            model.apply(snapshot: snapshot)
+        }
     }
 
     private func loadModelIntelligence() async {
@@ -428,7 +437,17 @@ final class NotchPanelController: NSWindowController {
         )
         model.notchReservedWidth = reservedWidth
 
-        let baseSize = model.expanded ? expandedSize : Self.collapsedSize
+        let collapsedHeight = NotchGeometry.collapsedHeight(
+            safeAreaTop: screen.safeAreaInsets.top,
+            hasPhysicalNotch: reservedWidth > 0,
+            fallbackHeight: Self.collapsedSize.height
+        )
+        if model.collapsedHeight != collapsedHeight {
+            model.collapsedHeight = collapsedHeight
+        }
+
+        let collapsedSize = NSSize(width: Self.collapsedSize.width, height: collapsedHeight)
+        let baseSize = model.expanded ? expandedSize : collapsedSize
         return NSSize(
             width: NotchGeometry.panelWidth(
                 baseWidth: baseSize.width,
@@ -514,4 +533,24 @@ private struct QuotaFetchOutcome: Sendable {
     let provider: SubscriptionProviderID
     let snapshot: SubscriptionQuotaSnapshot?
     let errorMessage: String?
+}
+
+private enum QuotaSnapshotCache {
+    private static let keyPrefix = "MiPopup.quotaSnapshot.v1."
+    private static let maxAge: TimeInterval = 6 * 60 * 60
+
+    static func load(provider: SubscriptionProviderID) -> SubscriptionQuotaSnapshot? {
+        let key = keyPrefix + provider.rawValue
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let snapshot = try? JSONDecoder().decode(SubscriptionQuotaSnapshot.self, from: data),
+              snapshot.provider == provider,
+              Date().timeIntervalSince(snapshot.fetchedAt) <= maxAge
+        else { return nil }
+        return snapshot
+    }
+
+    static func save(_ snapshot: SubscriptionQuotaSnapshot) {
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        UserDefaults.standard.set(data, forKey: keyPrefix + snapshot.provider.rawValue)
+    }
 }

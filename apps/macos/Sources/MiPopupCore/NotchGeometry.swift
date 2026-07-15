@@ -23,6 +23,15 @@ public enum NotchGeometry {
         return max(baseWidth, reservedWidth + visibleWidthPerSide * 2)
     }
 
+    public static func collapsedHeight(
+        safeAreaTop: CGFloat,
+        hasPhysicalNotch: Bool,
+        fallbackHeight: CGFloat = 38
+    ) -> CGFloat {
+        guard hasPhysicalNotch, safeAreaTop > 0 else { return fallbackHeight }
+        return safeAreaTop
+    }
+
     public static func topAnchoredContentFrame(
         containerSize: CGSize,
         contentSize: CGSize,

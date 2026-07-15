@@ -73,19 +73,28 @@ struct CodexSubscriptionQuotaProvider: SubscriptionQuotaProviding {
             let process = Process()
             let input = Pipe()
             let output = Pipe()
+            let errorOutput = Pipe()
             let collector = CodexResponseCollector()
 
             process.executableURL = URL(fileURLWithPath: binary)
             process.arguments = ["app-server", "--listen", "stdio://"]
             process.standardInput = input
             process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
+            process.standardError = errorOutput
+            process.terminationHandler = { process in
+                collector.processExited(status: process.terminationStatus)
+            }
 
             output.fileHandleForReading.readabilityHandler = { handle in
                 collector.append(handle.availableData)
             }
+            errorOutput.fileHandleForReading.readabilityHandler = { handle in
+                collector.appendDiagnostic(handle.availableData)
+            }
             defer {
+                process.terminationHandler = nil
                 output.fileHandleForReading.readabilityHandler = nil
+                errorOutput.fileHandleForReading.readabilityHandler = nil
                 try? input.fileHandleForWriting.close()
                 if process.isRunning { process.terminate() }
             }
@@ -99,7 +108,7 @@ struct CodexSubscriptionQuotaProvider: SubscriptionQuotaProviding {
                 """
                 try input.fileHandleForWriting.write(contentsOf: Data(request.utf8))
 
-                let response = try collector.wait(timeout: 25)
+                let response = try collector.wait(timeout: 12)
                 return try CodexSubscriptionQuotaParser.parse(responseLine: response)
             } catch let error as SubscriptionQuotaProviderError {
                 throw error
@@ -236,6 +245,7 @@ private final class CodexResponseCollector: @unchecked Sendable {
     private var buffer = Data()
     private var response: Data?
     private var errorMessage: String?
+    private var diagnosticBuffer = Data()
     private var finished = false
 
     func append(_ data: Data) {
@@ -262,6 +272,37 @@ private final class CodexResponseCollector: @unchecked Sendable {
             signal.signal()
             return
         }
+    }
+
+    func appendDiagnostic(_ data: Data) {
+        guard !data.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        guard !finished else { return }
+        diagnosticBuffer.append(data)
+        if diagnosticBuffer.count > 4_096 {
+            diagnosticBuffer = diagnosticBuffer.suffix(4_096)
+        }
+    }
+
+    func processExited(status: Int32) {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        let diagnostic = String(decoding: diagnosticBuffer, as: UTF8.self).lowercased()
+        if diagnostic.contains("sqlite state runtime") ||
+            diagnostic.contains("permission denied") ||
+            diagnostic.contains("operation not permitted")
+        {
+            errorMessage = "Codex 本地状态库无法访问，请检查 ~/.codex 目录权限。"
+        } else {
+            errorMessage = "Codex app-server 已提前退出（状态 \(status)）。"
+        }
+        finished = true
+        lock.unlock()
+        signal.signal()
     }
 
     func wait(timeout: TimeInterval) throws -> Data {

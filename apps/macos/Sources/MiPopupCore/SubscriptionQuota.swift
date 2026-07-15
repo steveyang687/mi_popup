@@ -1,6 +1,6 @@
 import Foundation
 
-public enum SubscriptionProviderID: String, CaseIterable, Sendable {
+public enum SubscriptionProviderID: String, CaseIterable, Sendable, Codable {
     case openAI
     case google
 
@@ -12,7 +12,7 @@ public enum SubscriptionProviderID: String, CaseIterable, Sendable {
     }
 }
 
-public struct SubscriptionQuotaWindow: Identifiable, Sendable, Equatable {
+public struct SubscriptionQuotaWindow: Identifiable, Sendable, Equatable, Codable {
     public let id: String
     public let label: String
     public let remainingPercent: Int
@@ -26,7 +26,7 @@ public struct SubscriptionQuotaWindow: Identifiable, Sendable, Equatable {
     }
 }
 
-public struct SubscriptionQuotaSnapshot: Sendable, Equatable {
+public struct SubscriptionQuotaSnapshot: Sendable, Equatable, Codable {
     public let provider: SubscriptionProviderID
     public let productName: String
     public let planName: String?

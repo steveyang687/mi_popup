@@ -21,6 +21,8 @@ struct NotificationLogImporterTests {
         )
         #expect(NotchGeometry.reservedWidth(leftAreaMaxX: nil, rightAreaMinX: nil) == 0)
         #expect(NotchGeometry.panelWidth(baseWidth: 430, reservedWidth: 0) == 430)
+        #expect(NotchGeometry.collapsedHeight(safeAreaTop: 32, hasPhysicalNotch: true) == 32)
+        #expect(NotchGeometry.collapsedHeight(safeAreaTop: 0, hasPhysicalNotch: false) == 38)
     }
 
     @Test
