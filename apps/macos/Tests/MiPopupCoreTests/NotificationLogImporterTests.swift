@@ -24,6 +24,39 @@ struct NotificationLogImporterTests {
     }
 
     @Test
+    func anchorsAnimatedIslandToTopAndCentersItHorizontally() {
+        let frame = NotchGeometry.topAnchoredContentFrame(
+            containerSize: CGSize(width: 470, height: 334),
+            contentSize: CGSize(width: 292, height: 38),
+            backingScale: 2
+        )
+
+        #expect(frame.origin.x == 89)
+        #expect(frame.origin.y == 296)
+        #expect(frame.size.width == 292)
+        #expect(frame.size.height == 38)
+        #expect(frame.origin.y + frame.size.height == 334)
+        #expect(frame.origin.x + frame.size.width / 2 == 235)
+
+        for intermediateSize in [
+            CGSize(width: 338.25, height: 104.75),
+            CGSize(width: 401.5, height: 231.25),
+            CGSize(width: 470, height: 334),
+        ] {
+            let intermediateFrame = NotchGeometry.topAnchoredContentFrame(
+                containerSize: CGSize(width: 470, height: 334),
+                contentSize: intermediateSize,
+                backingScale: 2
+            )
+            let topEdge = intermediateFrame.origin.y + intermediateFrame.size.height
+            let centerX = intermediateFrame.origin.x + intermediateFrame.size.width / 2
+
+            #expect(topEdge == 334)
+            #expect(abs(centerX - 235) <= 0.25)
+        }
+    }
+
+    @Test
     func importsValidLinesAndSkipsMalformedLines() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -22,7 +22,7 @@ Google AI Pro/Ultra 个人订阅已迁移到 Antigravity，因此不再使用旧
 ## 安装包
 
 - Android：`dist/MiPopupCapture-0.1.1-debug.apk`
-- macOS Apple Silicon：`dist/MiPopup-0.1.0-arm64.pkg`
+- macOS Apple Silicon：`dist/MiPopup-0.1.0-arm64.dmg`（拖入 Applications）或 `dist/MiPopup-0.1.0-arm64.pkg`（系统安装器）
 
 这些包均为本地开发签名。Android APK 使用 Android debug key；macOS `.app` 使用 ad-hoc 签名，`.pkg` 未使用 Apple Developer ID 签名且未公证。它们适合当前内部采样，不适合公开分发。
 
@@ -77,6 +77,8 @@ cd apps/macos
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --disable-sandbox
 ./scripts/package.sh
 ```
+
+该命令会同时生成 `.dmg` 和 `.pkg`。打开 DMG 后，将 `MiPopup.app` 拖到 `Applications` 即可安装。
 
 不打包直接运行 macOS 开发版本：
 

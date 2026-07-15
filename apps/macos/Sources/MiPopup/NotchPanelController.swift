@@ -20,11 +20,13 @@ final class NotchPanelController: NSWindowController {
     private var manualCollapseReleaseTask: Task<Void, Never>?
     nonisolated(unsafe) private var frameDisplayLink: CADisplayLink?
     private var frameAnimation: PanelFrameAnimation?
+    private var islandContainerView: IslandHostingContainerView?
+    private var islandHostingView: NSView?
     private var isPointerInside = false
     private var isManuallyCollapsedWhileHovered = false
 
     convenience init() {
-        let panel = NSPanel(
+        let panel = TopAnchoredPanel(
             contentRect: NSRect(origin: .zero, size: Self.collapsedSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -54,7 +56,12 @@ final class NotchPanelController: NSWindowController {
         guard let window, let screen = preferredScreen() else { return }
         let size = panelSize(for: screen)
         stopFrameAnimation()
-        window.setFrame(panelFrame(size: size, screen: screen), display: true)
+        applyPanelFrame(
+            panelFrame(size: size, screen: screen),
+            to: window,
+            screenTop: screen.frame.maxY
+        )
+        setIslandContentSize(size, backingScale: screen.backingScaleFactor)
     }
 
     func importLog(at url: URL) {
@@ -109,9 +116,13 @@ final class NotchPanelController: NSWindowController {
         hostingView.wantsLayer = true
         hostingView.layerContentsRedrawPolicy = .duringViewResize
         hostingView.layer?.needsDisplayOnBoundsChange = true
-        hostingView.frame = panel.contentView?.bounds ?? .zero
-        hostingView.autoresizingMask = [.width, .height]
-        panel.contentView = hostingView
+        let container = IslandHostingContainerView(frame: panel.contentView?.bounds ?? .zero)
+        hostingView.autoresizingMask = []
+        container.attach(hostingView)
+        panel.contentView = container
+        islandContainerView = container
+        islandHostingView = hostingView
+        container.setIslandFrame(container.bounds, cornerRadius: 19)
     }
 
     private func toggleExpanded() {
@@ -265,22 +276,41 @@ final class NotchPanelController: NSWindowController {
             startFrameAnimation(window: window, targetFrame: frame, screen: screen)
         } else {
             stopFrameAnimation()
-            window.setFrame(frame, display: true)
+            applyPanelFrame(frame, to: window, screenTop: screen.frame.maxY)
+            setIslandContentSize(size, backingScale: screen.backingScaleFactor)
         }
     }
 
     private func startFrameAnimation(window: NSWindow, targetFrame: NSRect, screen: NSScreen) {
         stopFrameAnimation()
-        guard window.frame != targetFrame else { return }
+        let startSize = islandContainerView?.islandFrame.size ?? window.frame.size
+        let targetSize = targetFrame.size
+        guard startSize != targetSize else {
+            applyPanelFrame(targetFrame, to: window, screenTop: screen.frame.maxY)
+            setIslandContentSize(targetSize, backingScale: screen.backingScaleFactor)
+            return
+        }
+
+        let canvasSize = NSSize(
+            width: max(startSize.width, targetSize.width),
+            height: max(startSize.height, targetSize.height)
+        )
+        let canvasFrame = panelFrame(size: canvasSize, screen: screen)
+
+        // Keep the window fixed at the largest animation bounds. Only the island
+        // content changes size, so its top edge cannot be displaced by live window resizing.
+        applyPanelFrame(canvasFrame, to: window, screenTop: screen.frame.maxY)
+        setIslandContentSize(startSize, backingScale: screen.backingScaleFactor)
+        window.contentView?.displayIfNeeded()
 
         frameAnimation = PanelFrameAnimation(
-            startFrame: window.frame,
+            startSize: startSize,
+            targetSize: targetSize,
             targetFrame: targetFrame,
             startedAt: CACurrentMediaTime(),
             duration: 0.32,
             scale: screen.backingScaleFactor,
-            screenTop: screen.frame.maxY,
-            screenMidX: screen.frame.midX
+            screenTop: screen.frame.maxY
         )
         let displayLink = window.displayLink(
             target: self,
@@ -299,26 +329,52 @@ final class NotchPanelController: NSWindowController {
         let rawProgress = (displayLink.timestamp - animation.startedAt) / animation.duration
         let progress = min(1, max(0, rawProgress))
         let eased = 0.5 - cos(.pi * progress) / 2
-        let width = interpolate(animation.startFrame.width, animation.targetFrame.width, eased)
-        let height = interpolate(animation.startFrame.height, animation.targetFrame.height, eased)
-        let frame = pixelAlignedFrame(
-            width: width,
-            height: height,
-            screenMidX: animation.screenMidX,
-            screenTop: animation.screenTop,
-            scale: animation.scale
+        let size = NSSize(
+            width: interpolate(animation.startSize.width, animation.targetSize.width, eased),
+            height: interpolate(animation.startSize.height, animation.targetSize.height, eased)
         )
 
-        window.setFrame(frame, display: true)
-        window.contentView?.needsLayout = true
-        window.contentView?.layoutSubtreeIfNeeded()
-        window.contentView?.needsDisplay = true
-        window.contentView?.displayIfNeeded()
+        setIslandContentSize(size, backingScale: animation.scale)
 
         if progress >= 1 {
-            window.setFrame(animation.targetFrame, display: true)
+            applyPanelFrame(
+                animation.targetFrame,
+                to: window,
+                screenTop: animation.screenTop
+            )
+            setIslandContentSize(animation.targetSize, backingScale: animation.scale)
+            window.contentView?.displayIfNeeded()
             stopFrameAnimation()
         }
+    }
+
+    private func applyPanelFrame(_ frame: NSRect, to window: NSWindow, screenTop: CGFloat) {
+        let pinnedFrame = NSRect(
+            x: frame.minX,
+            y: screenTop - frame.height,
+            width: frame.width,
+            height: frame.height
+        )
+        window.setFrame(pinnedFrame, display: false)
+        window.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    private func setIslandContentSize(_ size: NSSize, backingScale: CGFloat) {
+        guard let container = islandContainerView else { return }
+        container.layoutSubtreeIfNeeded()
+        let frame = NotchGeometry.topAnchoredContentFrame(
+            containerSize: container.bounds.size,
+            contentSize: size,
+            backingScale: backingScale
+        )
+        container.setIslandFrame(
+            frame,
+            cornerRadius: model.expanded ? 24 : 19
+        )
+        islandHostingView?.needsLayout = true
+        islandHostingView?.layoutSubtreeIfNeeded()
+        islandHostingView?.needsDisplay = true
+        islandHostingView?.displayIfNeeded()
     }
 
     private func stopFrameAnimation() {
@@ -398,13 +454,60 @@ final class NotchPanelController: NSWindowController {
 }
 
 private struct PanelFrameAnimation {
-    let startFrame: NSRect
+    let startSize: NSSize
+    let targetSize: NSSize
     let targetFrame: NSRect
     let startedAt: CFTimeInterval
     let duration: CFTimeInterval
     let scale: CGFloat
     let screenTop: CGFloat
-    let screenMidX: CGFloat
+}
+
+private final class IslandHostingContainerView: NSView {
+    private let backdrop = NSView()
+    private weak var hostedView: NSView?
+    private(set) var islandFrame = NSRect.zero
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+
+        backdrop.wantsLayer = true
+        backdrop.layer?.backgroundColor = NSColor.black.cgColor
+        backdrop.layer?.cornerCurve = .continuous
+        backdrop.layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        backdrop.layer?.masksToBounds = true
+        addSubview(backdrop)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func attach(_ view: NSView) {
+        hostedView = view
+        addSubview(view, positioned: .above, relativeTo: backdrop)
+    }
+
+    func setIslandFrame(_ frame: NSRect, cornerRadius: CGFloat) {
+        islandFrame = frame
+        backdrop.frame = frame
+        backdrop.layer?.cornerRadius = cornerRadius
+        hostedView?.frame = frame
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard islandFrame.contains(point) else { return nil }
+        return super.hitTest(point)
+    }
+}
+
+private final class TopAnchoredPanel: NSPanel {
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
 }
 
 private struct QuotaFetchOutcome: Sendable {
