@@ -22,6 +22,8 @@ class CaptureLogStore(context: Context) {
 
     @Synchronized
     fun append(record: JSONObject) {
+        // Raw notification text stays in the app-private directory for parser development.
+        // Only exportRedacted/recentRedacted may expose these records outside the sandbox.
         directory.mkdirs()
         val day = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
         val target = File(directory, "events-$day.jsonl")

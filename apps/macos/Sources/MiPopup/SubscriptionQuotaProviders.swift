@@ -359,6 +359,8 @@ private enum AntigravityProcessDetector {
             if let portValue = extractFlag("--extension_server_port", command: command),
                let port = Int(portValue)
             {
+                // The CSRF token is copied only into the in-memory localhost request header.
+                // Do not persist or log it; Antigravity remains the owner of the login state.
                 let extensionToken = extractFlag("--extension_server_csrf_token", command: command) ?? csrfToken
                 extraEndpoints.append(
                     AntigravityEndpoint(scheme: "http", port: port, csrfToken: extensionToken)

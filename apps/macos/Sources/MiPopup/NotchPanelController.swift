@@ -550,6 +550,8 @@ private enum QuotaSnapshotCache {
     }
 
     static func save(_ snapshot: SubscriptionQuotaSnapshot) {
+        // Cache only display-safe quota summaries. Login cookies, OAuth tokens, CSRF tokens,
+        // account identifiers, and raw provider responses must never be stored in UserDefaults.
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         UserDefaults.standard.set(data, forKey: keyPrefix + snapshot.provider.rawValue)
     }

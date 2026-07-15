@@ -6,12 +6,14 @@ import org.json.JSONObject
 object Redactor {
     private val phone = Regex("(?<!\\d)1[3-9]\\d{9}(?!\\d)")
     private val longIdentifier = Regex("(?<!\\d)\\d{8,}(?!\\d)")
-    private val token = Regex("(?i)(token|cookie|authorization)(\\s*[:=]\\s*)[^\\s,;]+")
+    private val credential = Regex(
+        "(?i)(api[_-]?key|access[_-]?token|refresh[_-]?token|token|cookie|authorization|bearer|password|passwd|pwd|secret)(\\s*[:=]\\s*)[^\\s,;]+"
+    )
 
     fun redactText(value: String): String = value
         .replace(phone, "[手机号]")
         .replace(longIdentifier, "[长编号]")
-        .replace(token) { match -> "${match.groupValues[1]}${match.groupValues[2]}[凭据]" }
+        .replace(credential) { match -> "${match.groupValues[1]}${match.groupValues[2]}[凭据]" }
 
     fun redact(record: JSONObject): JSONObject {
         val result = JSONObject(record.toString())
