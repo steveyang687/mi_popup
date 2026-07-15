@@ -7,3 +7,4 @@ apps/macos/.build/
 apps/macos/.build-cache/
 apps/macos/.build-home/
 apps/macos/.package/
+dist/
