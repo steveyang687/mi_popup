@@ -14,7 +14,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Validate release version
         id: version
@@ -50,7 +50,7 @@ jobs:
 
           test -f "$dmg"
           test -f "$pkg"
-          lipo -verify_arch arm64 apps/macos/.build/release/MiPopup
+          lipo apps/macos/.build/release/MiPopup -verify_arch arm64
           shasum -a 256 "$dmg" "$pkg" > dist/SHA256SUMS.txt
 
           echo "dmg=$dmg" >> "$GITHUB_OUTPUT"
