@@ -1,0 +1,72 @@
+name: Release macOS
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate release version
+        id: version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          plist_version=$(/usr/libexec/PlistBuddy \
+            -c "Print :CFBundleShortVersionString" \
+            apps/macos/Packaging/Info.plist)
+
+          if [[ "$GITHUB_REF_NAME" == "$version" || "$version" != "$plist_version" ]]; then
+            echo "Tag $GITHUB_REF_NAME must match Info.plist version v$plist_version" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Run macOS tests
+        working-directory: apps/macos
+        run: swift test --disable-sandbox
+
+      - name: Build DMG and PKG
+        working-directory: apps/macos
+        run: ./scripts/package.sh
+
+      - name: Verify release artifacts
+        id: artifacts
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          dmg="dist/MiPopup-${version}-arm64.dmg"
+          pkg="dist/MiPopup-${version}-arm64.pkg"
+
+          test -f "$dmg"
+          test -f "$pkg"
+          lipo -verify_arch arm64 apps/macos/.build/release/MiPopup
+          shasum -a 256 "$dmg" "$pkg" > dist/SHA256SUMS.txt
+
+          echo "dmg=$dmg" >> "$GITHUB_OUTPUT"
+          echo "pkg=$pkg" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DMG_PATH: ${{ steps.artifacts.outputs.dmg }}
+          PKG_PATH: ${{ steps.artifacts.outputs.pkg }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "$DMG_PATH" \
+            "$PKG_PATH" \
+            dist/SHA256SUMS.txt \
+            --title "MiPopup $VERSION" \
+            --generate-notes \
+            --verify-tag
