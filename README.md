@@ -1,9 +1,6 @@
-# Notchvisor (formerly MiPopup)
+# Notchvisor
 
 Notchvisor is a lightweight "Dynamic Island" status panel running in the MacBook notch area. 
-
-> [!IMPORTANT]
-> My README has setup instructions and explains how Codex and GPT-5.6 were used.
 
 The application reads the local subscription quotas for OpenAI Codex and Google Antigravity, combining them with Codex Radar's public model IQ summaries to recommend the optimal Codex configuration on the fly. 
 
