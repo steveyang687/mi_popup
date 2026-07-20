@@ -26,6 +26,12 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>用于接收同一局域网内 Android 设备发送的外卖配送状态。</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_mipopup._tcp</string>
+    </array>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
 </dict>

@@ -17,6 +17,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -60,7 +61,12 @@ class MainActivity : Activity() {
         scroll.addView(content)
 
         content.addView(label("MiPopup 通知采集", 26f, true, Color.WHITE))
-        content.addView(label("仅在手机本地记录美团与淘宝闪购通知；应用不含网络权限。", 14f, false, Color.LTGRAY).withMargin(top = 8))
+        content.addView(label(
+            "原始通知仅保存在手机；解析后的配送状态会直接发送到同一局域网内的 Mac，不使用服务器或跨网传输。当前内测通道尚未配对加密，请仅在可信网络使用。",
+            14f,
+            false,
+            Color.LTGRAY
+        ).withMargin(top = 8))
 
         statusText = label("正在读取状态…", 15f, false, Color.WHITE)
         content.addView(card(statusText).withMargin(top = 20))
@@ -71,6 +77,16 @@ class MainActivity : Activity() {
 
         content.addView(button("2. 扫描当前活动通知") {
             scanActiveNotifications()
+        }.withMargin(top = 8))
+
+        content.addView(button("3. 立即重试局域网同步") {
+            if (AppNotificationListenerService.requestLanSync()) {
+                toast("已请求同步待发送的配送状态")
+                statusText.postDelayed({ refresh() }, 500)
+            } else {
+                NotificationListenerService.requestRebind(listenerComponent())
+                toast("监听服务尚未连接，已请求重连")
+            }
         }.withMargin(top = 8))
 
         content.addView(label("目标应用包名（每行一个）", 15f, true, Color.WHITE).withMargin(top = 24))
@@ -94,7 +110,7 @@ class MainActivity : Activity() {
             }
         }.withMargin(top = 8))
 
-        content.addView(button("3. 导出脱敏 JSONL") { chooseExportTarget() }.withMargin(top = 20))
+        content.addView(button("4. 导出脱敏 JSONL") { chooseExportTarget() }.withMargin(top = 20))
         content.addView(button("刷新日志预览") { refresh() }.withMargin(top = 8))
         content.addView(button("清空本地日志") {
             worker.execute {
@@ -111,7 +127,7 @@ class MainActivity : Activity() {
         content.addView(card(previewText).withMargin(top = 8))
 
         content.addView(label(
-            "采集范围：标题、正文、展开正文、子标题、文本行、通知渠道及时间。原始日志仅存于应用私有目录，保留 7 天且最多 20 MiB；导出时自动遮盖手机号、长编号和常见凭据。",
+            "采集范围：标题、正文、展开正文、子标题、文本行、通知渠道及时间。原始日志仅存于应用私有目录，保留 7 天且最多 20 MiB；导出时自动脱敏。局域网同步只发送解析后的状态、时间和不可逆订单关联值，不发送原始通知正文。",
             12f,
             false,
             Color.GRAY
@@ -126,12 +142,21 @@ class MainActivity : Activity() {
             val store = CaptureLogStore(this)
             val snapshot = store.snapshot()
             val recent = store.recentRedacted(12)
+            val pending = LanOutboxStore(
+                File(filesDir, LanOutboxStore.DIRECTORY_NAME)
+            ).pendingCount()
+            val lanSync = LanSyncMonitor.snapshot()
             runOnUiThread {
                 statusText.text = buildString {
                     append(if (enabled) "● 通知读取权限已开启" else "○ 通知读取权限未开启")
                     append("\n已记录 ${snapshot.eventCount} 条事件")
                     append(" · ${formatBytes(snapshot.totalBytes)}")
                     append(" · ${snapshot.fileCount} 个日志文件")
+                    append("\n局域网同步：${formatLanPhase(lanSync.phase)} · 待发送 $pending 条")
+                    append("\n${lanSync.message}")
+                    lanSync.lastAcknowledgedAt?.let {
+                        append("\n最近确认：${formatTime(it)}")
+                    }
                     if (activeScan != null) {
                         append("\n活动扫描：系统 ${activeScan.totalCount} 条 · 目标 ${activeScan.targetCount} 条")
                         if (activeScan.errorMessage != null) {
@@ -238,6 +263,17 @@ class MainActivity : Activity() {
         bytes < 1024 * 1024 -> "%.1f KiB".format(bytes / 1024.0)
         else -> "%.1f MiB".format(bytes / (1024.0 * 1024.0))
     }
+
+    private fun formatLanPhase(phase: LanSyncPhase): String = when (phase) {
+        LanSyncPhase.STOPPED -> "未连接"
+        LanSyncPhase.IDLE -> "待机"
+        LanSyncPhase.DISCOVERING -> "发现 Mac"
+        LanSyncPhase.SENDING -> "正在发送"
+        LanSyncPhase.WAITING_RETRY -> "等待重试"
+    }
+
+    private fun formatTime(timestamp: Long): String =
+        SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(timestamp))
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
 

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "parserVersion": 1,
+  "eventId": "3aef2db4-f708-4e2f-988d-233d38a07f91",
+  "sourceEventKind": "posted",
+  "capturedAt": 1784255778298,
+  "provider": "meituan",
+  "state": "unknown",
+  "statusText": "订单进行中",
+  "confidence": 0.95,
+  "orderKey": "b73b99bb6bcbb468aca76311d18efd7365c2c15158b60cf2935adc0cc038399d",
+  "sourcePackage": "com.sankuai.meituan"
+}

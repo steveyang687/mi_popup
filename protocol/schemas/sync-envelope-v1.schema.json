@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mipopup.local/schemas/sync-envelope-v1.schema.json",
+  "title": "MiPopup LAN Sync Envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "type",
+    "deviceId",
+    "sequence",
+    "sentAt",
+    "payload"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "const": 1
+    },
+    "type": {
+      "const": "delivery_update"
+    },
+    "deviceId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "sentAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "payload": {
+      "$ref": "delivery-update-v1.schema.json"
+    }
+  }
+}

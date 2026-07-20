@@ -17,8 +17,10 @@ public struct CapturedNotification: Codable, Sendable, Equatable {
     public let textLines: [String]?
     public let category: String?
     public let channelId: String?
+    public let groupSummary: Bool?
     public let ongoing: Bool?
     public let clearable: Bool?
+    public let delivery: DeliveryUpdate?
 
     public init(
         schemaVersion: Int,
@@ -37,8 +39,10 @@ public struct CapturedNotification: Codable, Sendable, Equatable {
         textLines: [String]? = nil,
         category: String? = nil,
         channelId: String? = nil,
+        groupSummary: Bool? = nil,
         ongoing: Bool? = nil,
-        clearable: Bool? = nil
+        clearable: Bool? = nil,
+        delivery: DeliveryUpdate? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.eventId = eventId
@@ -56,8 +60,10 @@ public struct CapturedNotification: Codable, Sendable, Equatable {
         self.textLines = textLines
         self.category = category
         self.channelId = channelId
+        self.groupSummary = groupSummary
         self.ongoing = ongoing
         self.clearable = clearable
+        self.delivery = delivery
     }
 }
 
@@ -72,6 +78,16 @@ public struct NotificationImportSummary: Sendable, Equatable {
 
     public var latestEvent: CapturedNotification? {
         events.max { $0.capturedAt < $1.capturedAt }
+    }
+
+    public var deliveryUpdates: [DeliveryUpdate] {
+        events.compactMap { event in
+            event.delivery ?? DeliveryNotificationParser.parse(event)
+        }
+    }
+
+    public var latestDeliveryUpdate: DeliveryUpdate? {
+        deliveryUpdates.max { $0.capturedAt < $1.capturedAt }
     }
 
     public init(fileName: String, events: [CapturedNotification], skippedLineCount: Int) {

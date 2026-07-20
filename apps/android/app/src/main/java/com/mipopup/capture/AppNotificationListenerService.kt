@@ -5,27 +5,44 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.security.MessageDigest
 import java.util.LinkedHashMap
 import java.util.UUID
 import java.util.concurrent.Executors
 
 /**
- * Local-only adaptation of NotificationForwarder's listener/dedup pipeline.
- * Webhook scheduling and network transmission are intentionally omitted.
+ * NotificationForwarder-style listener/dedup pipeline with local-network-only
+ * delivery status synchronization. Raw notification content stays on the phone.
  */
 class AppNotificationListenerService : NotificationListenerService() {
     private val writer = Executors.newSingleThreadExecutor()
     private val recentContent = LinkedHashMap<String, String>(MAX_RECENT_EVENTS, 0.75f, true)
 
+    private lateinit var outbox: LanOutboxStore
+    private lateinit var identityStore: LanIdentityStore
+
+    @Volatile
+    private var lanSync: LanSyncCoordinator? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        outbox = LanOutboxStore(File(filesDir, LanOutboxStore.DIRECTORY_NAME))
+        identityStore = LanIdentityStore(applicationContext)
+    }
+
     override fun onListenerConnected() {
         super.onListenerConnected()
         activeInstance = this
+        lanSync?.close()
+        lanSync = LanSyncCoordinator(applicationContext, outbox).also(LanSyncCoordinator::start)
         scanActiveNotifications()
     }
 
     override fun onListenerDisconnected() {
         if (activeInstance === this) activeInstance = null
+        lanSync?.close()
+        lanSync = null
         super.onListenerDisconnected()
     }
 
@@ -79,6 +96,7 @@ class AppNotificationListenerService : NotificationListenerService() {
         val progress = extras?.getInt(Notification.EXTRA_PROGRESS, 0) ?: 0
         val progressMax = extras?.getInt(Notification.EXTRA_PROGRESS_MAX, 0) ?: 0
         val progressIndeterminate = extras?.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE, false) ?: false
+        val groupSummary = (notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0
 
         val keyHash = sha256("${settings.keySalt}:${item.key}")
         val contentHash = sha256(
@@ -120,11 +138,59 @@ class AppNotificationListenerService : NotificationListenerService() {
             .put("progressIndeterminate", progressIndeterminate)
             .put("groupKey", item.groupKey ?: "")
             .put("tag", item.tag ?: "")
-            .put("groupSummary", (notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0)
+            .put("groupSummary", groupSummary)
             .put("ongoing", item.isOngoing)
             .put("clearable", item.isClearable)
 
-        writer.execute { CaptureLogStore(applicationContext).append(record) }
+        val deliveryUpdate = DeliveryNotificationParser.parse(
+            DeliveryNotificationInput(
+                eventId = record.getString("eventId"),
+                eventKind = eventKind,
+                capturedAt = record.getLong("capturedAt"),
+                sourcePackage = item.packageName,
+                notificationKeyHash = keyHash,
+                title = title,
+                text = text,
+                bigText = bigText,
+                subText = subText,
+                textLines = textLines,
+                groupSummary = groupSummary
+            )
+        )
+        deliveryUpdate?.let { record.put("delivery", it.toJson()) }
+
+        writer.execute {
+            val enqueued = deliveryUpdate?.let { update ->
+                runCatching {
+                    val sequence = identityStore.nextSequence()
+                    val envelope = LanProtocol.encodeDeliveryUpdate(
+                        deviceId = identityStore.deviceId(),
+                        sequence = sequence,
+                        sentAt = System.currentTimeMillis(),
+                        deliveryUpdateJson = update.toJson().toString()
+                    )
+                    outbox.enqueue(
+                        LanOutboxEntry(
+                            eventId = update.eventId,
+                            sequence = sequence,
+                            envelopeJson = envelope
+                        )
+                    )
+                }.onFailure { error ->
+                    LanSyncMonitor.update(
+                        phase = LanSyncPhase.IDLE,
+                        pendingCount = runCatching { outbox.pendingCount() }.getOrDefault(0),
+                        message = "配送状态入队失败：${error.localizedMessage ?: error.javaClass.simpleName}"
+                    )
+                }.getOrDefault(false)
+            } ?: false
+
+            try {
+                CaptureLogStore(applicationContext).append(record)
+            } finally {
+                if (enqueued) lanSync?.kick()
+            }
+        }
         return true
     }
 
@@ -140,6 +206,8 @@ class AppNotificationListenerService : NotificationListenerService() {
 
     override fun onDestroy() {
         if (activeInstance === this) activeInstance = null
+        lanSync?.close()
+        lanSync = null
         writer.shutdown()
         super.onDestroy()
     }
@@ -187,6 +255,12 @@ class AppNotificationListenerService : NotificationListenerService() {
         private var lastActiveScan: ActiveNotificationScanResult? = null
 
         fun requestActiveSnapshot(): ActiveNotificationScanResult? = activeInstance?.scanActiveNotifications()
+
+        fun requestLanSync(): Boolean {
+            val coordinator = activeInstance?.lanSync ?: return false
+            coordinator.kick()
+            return true
+        }
 
         fun lastActiveScanResult(): ActiveNotificationScanResult? = lastActiveScan
     }

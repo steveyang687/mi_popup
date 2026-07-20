@@ -1,17 +1,38 @@
 import AppKit
 import MiPopupCore
+import MiPopupLAN
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panelController: NotchPanelController?
+    private var localDeliveryServer: LocalDeliveryServer?
     private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let panelController = NotchPanelController()
         panelController.onImportRequest = { [weak self] in self?.chooseLogFile() }
         self.panelController = panelController
+        let server = LocalDeliveryServer(
+            onStateChange: { state in
+                #if DEBUG
+                print("MiPopup LAN server: \(state)")
+                #endif
+            },
+            onDelivery: { [weak panelController] update in
+                panelController?.receive(delivery: update)
+            }
+        )
+        if let restored = server.restoredLatestDelivery {
+            panelController.receive(delivery: restored, restoreOnly: true)
+        }
+        localDeliveryServer = server
+        server.start()
         buildStatusMenu()
         panelController.show()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        localDeliveryServer?.stop()
     }
 
     func applicationDidChangeScreenParameters(_ notification: Notification) {

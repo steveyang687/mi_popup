@@ -142,6 +142,10 @@ struct IslandView: View {
 
     private var quotaContent: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let delivery = model.latestDelivery {
+                deliveryCard(delivery)
+            }
+
             HStack(alignment: .top, spacing: 10) {
                 ForEach(model.quotaStates) { state in
                     quotaCard(state)
@@ -158,6 +162,54 @@ struct IslandView: View {
                 .foregroundStyle(.white.opacity(0.48))
             }
         }
+    }
+
+    private func deliveryCard(_ delivery: DeliveryUpdate) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: "takeoutbag.and.cup.and.straw.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.orange)
+                .frame(width: 24, height: 24)
+                .background(Color.orange.opacity(0.13), in: Circle())
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    Text(delivery.provider.displayName)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                    Text(delivery.stage.displayName)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.orange)
+                }
+                Text(model.latestText)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.52))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+
+            Spacer(minLength: 4)
+
+            VStack(alignment: .trailing, spacing: 1) {
+                if let eta = delivery.etaText {
+                    Text(eta)
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(.green)
+                        .lineLimit(1)
+                }
+                Text(model.deliverySourceText)
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.38))
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .stroke(Color.orange.opacity(0.16), lineWidth: 1)
+        )
     }
 
     @ViewBuilder

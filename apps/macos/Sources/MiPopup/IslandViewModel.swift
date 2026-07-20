@@ -40,6 +40,8 @@ final class IslandViewModel: ObservableObject {
     @Published var eventCount = 0
     @Published var sourceText = "尚无来源"
     @Published var latestText = "配送状态解析将在采样后启用"
+    @Published var latestDelivery: DeliveryUpdate?
+    @Published var deliverySourceText = "Android 通知日志"
     @Published var hasError = false
     @Published var notchReservedWidth: CGFloat = 0
     @Published var collapsedHeight: CGFloat = 38
@@ -53,6 +55,9 @@ final class IslandViewModel: ObservableObject {
     @Published var isRefreshingModelIntelligence = false
 
     var headerTitle: String {
+        if let delivery = latestDelivery {
+            return "\(delivery.provider.displayName) · \(delivery.stage.displayName)"
+        }
         guard expanded, selectedTab == .models else { return statusTitle }
         if let strongest = modelIntelligence?.strongest {
             return "推荐 \(shortModelName(strongest)) · IQ \(formatScore(strongest.score))"
@@ -133,14 +138,41 @@ final class IslandViewModel: ObservableObject {
         eventCount = summary.events.count
         sourceText = summary.sourceNames.joined(separator: "、")
         let skippedSuffix = summary.skippedLineCount == 0 ? "" : "，跳过 \(summary.skippedLineCount) 行"
-        statusTitle = "已载入 \(summary.events.count) 条通知"
         statusDetail = "\(summary.fileName)\(skippedSuffix)"
-        latestText = latestDescription(summary.latestEvent)
+        if let delivery = summary.latestDeliveryUpdate {
+            latestDelivery = delivery
+            deliverySourceText = "Android 通知日志"
+            statusTitle = "\(delivery.provider.displayName) · \(delivery.stage.displayName)"
+            latestText = deliveryDescription(delivery)
+        } else {
+            latestDelivery = nil
+            statusTitle = "已载入 \(summary.events.count) 条通知"
+            latestText = latestDescription(summary.latestEvent)
+        }
         hasError = false
         expanded = true
     }
 
+    @discardableResult
+    func apply(delivery update: DeliveryUpdate, source: String, expand: Bool) -> Bool {
+        if let current = latestDelivery, current.capturedAt > update.capturedAt {
+            return false
+        }
+        latestDelivery = update
+        deliverySourceText = source
+        statusTitle = "\(update.provider.displayName) · \(update.stage.displayName)"
+        statusDetail = source
+        latestText = deliveryDescription(update)
+        selectedTab = .quota
+        hasError = false
+        if expand {
+            expanded = true
+        }
+        return true
+    }
+
     func apply(error: Error) {
+        latestDelivery = nil
         statusTitle = "日志导入失败"
         statusDetail = error.localizedDescription
         latestText = "请确认文件来自 MiPopup Android 采集器"
@@ -155,6 +187,17 @@ final class IslandViewModel: ObservableObject {
             .first { !$0.isEmpty }
             ?? event.eventKind
         return "\(event.appName): \(content)"
+    }
+
+    private func deliveryDescription(_ update: DeliveryUpdate) -> String {
+        var parts = [update.statusText]
+        if let eta = update.etaText, !parts.contains(where: { $0.contains(eta) }) {
+            parts.append("预计 \(eta)")
+        }
+        return parts.reduce(into: [String]()) { result, part in
+            if result.last != part { result.append(part) }
+        }
+        .joined(separator: " · ")
     }
 
     private func updateQuotaHeader() {

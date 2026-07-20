@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:macos}",
+            "name": "Debug MiPopup",
+            "target": "MiPopup",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug MiPopup"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:macos}",
+            "name": "Release MiPopup",
+            "target": "MiPopup",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release MiPopup"
+        }
+    ]
+}

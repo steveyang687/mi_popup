@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mipopup.local/schemas/delivery-update-v1.schema.json",
+  "title": "MiPopup Delivery Update v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "parserVersion",
+    "eventId",
+    "sourceEventKind",
+    "capturedAt",
+    "provider",
+    "state",
+    "statusText",
+    "confidence",
+    "orderKey",
+    "sourcePackage"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "parserVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "eventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "sourceEventKind": {
+      "enum": [
+        "posted",
+        "active",
+        "updated"
+      ]
+    },
+    "capturedAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "provider": {
+      "enum": [
+        "meituan",
+        "taobao_instant"
+      ]
+    },
+    "state": {
+      "enum": [
+        "unknown",
+        "order_placed",
+        "merchant_confirmed",
+        "preparing",
+        "courier_assigned",
+        "courier_picking_up",
+        "delivering",
+        "arriving",
+        "delivered",
+        "cancelled"
+      ]
+    },
+    "statusText": {
+      "type": "string",
+      "minLength": 1
+    },
+    "etaText": {
+      "type": "string",
+      "minLength": 1
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "orderKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourcePackage": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

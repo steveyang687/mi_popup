@@ -78,6 +78,26 @@ final class NotchPanelController: NSWindowController {
         show()
     }
 
+    func receive(delivery update: DeliveryUpdate, restoreOnly: Bool = false) {
+        guard model.apply(
+            delivery: update,
+            source: restoreOnly ? "Android · 上次局域网同步" : "Android · 局域网实时同步",
+            expand: !restoreOnly
+        ) else { return }
+
+        guard !restoreOnly else { return }
+        hoverCollapseTask?.cancel()
+        hoverCollapseTask = nil
+        manualCollapseReleaseTask?.cancel()
+        manualCollapseReleaseTask = nil
+        isManuallyCollapsedWhileHovered = false
+        resize(animated: true)
+        show()
+        if !isPointerInside {
+            scheduleAutomaticCollapse()
+        }
+    }
+
     func refreshQuotas() {
         guard !model.isRefreshingSelectedTab else { return }
         immediateRefreshTask = Task { [weak self] in
@@ -154,6 +174,11 @@ final class NotchPanelController: NSWindowController {
         }
 
         guard model.expanded else { return }
+        scheduleAutomaticCollapse()
+    }
+
+    private func scheduleAutomaticCollapse() {
+        hoverCollapseTask?.cancel()
         hoverCollapseTask = Task { [weak self] in
             do {
                 try await Task.sleep(for: .seconds(3))
@@ -462,7 +487,9 @@ final class NotchPanelController: NSWindowController {
         let height: CGFloat
         switch model.selectedTab {
         case .quota:
-            height = model.eventCount > 0 ? 320 : 302
+            height = 302
+                + (model.latestDelivery == nil ? 0 : 54)
+                + (model.eventCount == 0 ? 0 : 18)
         case .models:
             height = 334
         }

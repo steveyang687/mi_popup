@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mipopup.local/schemas/sync-ack-v1.schema.json",
+  "title": "MiPopup LAN Sync ACK v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "type",
+    "eventId",
+    "status",
+    "acceptedAt"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "const": 1
+    },
+    "type": {
+      "const": "ack"
+    },
+    "eventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "status": {
+      "enum": [
+        "accepted",
+        "duplicate"
+      ]
+    },
+    "acceptedAt": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}
