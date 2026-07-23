@@ -115,6 +115,65 @@ struct MiPopupLANTests {
         #expect(envelope.sequence == 7)
         #expect(envelope.payload.stage == .delivering)
         #expect(envelope.payload.etaText == "18:35")
+        #expect(envelope.payload.sourceFormat == nil)
+    }
+
+    @Test
+    func decodesHyperOSFocusDeliveryDetails() throws {
+        let json = """
+        {
+          "protocolVersion": 1,
+          "type": "delivery_update",
+          "deviceId": "a0b1c2d3-e4f5-4678-9123-abcdefabcdef",
+          "sequence": 8,
+          "sentAt": 1784390000000,
+          "payload": {
+            "schemaVersion": 1,
+            "parserVersion": 2,
+            "eventId": "01234567-89ab-4cde-8fab-0123456789ab",
+            "sourceEventKind": "updated",
+            "capturedAt": 1784390000000,
+            "provider": "meituan",
+            "state": "delivering",
+            "statusText": "配送中",
+            "etaText": "17分钟",
+            "statusDetail": "骑手正在为您送货",
+            "progressPercent": 45,
+            "sourceFormat": "hyperos_focus",
+            "confidence": 0.98,
+            "orderKey": "notification-hash",
+            "sourcePackage": "com.sankuai.meituan"
+          }
+        }
+        """
+
+        let update = try DeliveryWireCodec.decodeEnvelope(Data(json.utf8)).payload
+
+        #expect(update.statusDetail == "骑手正在为您送货")
+        #expect(update.progressPercent == 45)
+        #expect(update.sourceFormat == .hyperOSFocus)
+    }
+
+    @Test
+    func rejectsOutOfRangeDeliveryProgress() {
+        let update = DeliveryUpdate(
+            eventId: UUID().uuidString,
+            sourceEventKind: "posted",
+            capturedAt: 2,
+            provider: .meituan,
+            stage: .delivering,
+            statusText: DeliveryStage.delivering.displayName,
+            etaText: "17分钟",
+            progressPercent: 101,
+            sourceFormat: .hyperOSFocus,
+            confidence: 0.98,
+            orderKey: "order-key",
+            sourcePackage: "com.sankuai.meituan"
+        )
+
+        #expect(throws: DeliveryWireValidationError.invalidProgressPercent) {
+            try DeliveryWireValidator.validate(update)
+        }
     }
 
     @Test
@@ -209,6 +268,27 @@ struct MiPopupLANTests {
         #expect(restored.contains(eventId: newest.eventId))
         #expect(restored.contains(eventId: laterArrivalWithOlderTimestamp.eventId))
         #expect(restored.latestDelivery == newest)
+    }
+
+    @Test
+    func persistsDismissalUntilANewerDeliveryArrives() throws {
+        let suiteName = "MiPopupLANTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let key = "state"
+        let store = RecentDeliveryStore(defaults: defaults, key: key)
+        let current = deliveryUpdate(capturedAt: 1)
+
+        #expect(store.record(current))
+        store.dismiss(eventId: current.eventId)
+        #expect(store.latestDelivery == nil)
+
+        let restored = RecentDeliveryStore(defaults: defaults, key: key)
+        #expect(restored.latestDelivery == nil)
+
+        let newer = deliveryUpdate(capturedAt: 2)
+        #expect(restored.record(newer))
+        #expect(restored.latestDelivery == newer)
     }
 
     private func deliveryUpdate(capturedAt: Int64) -> DeliveryUpdate {

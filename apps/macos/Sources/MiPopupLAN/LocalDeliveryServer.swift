@@ -65,6 +65,10 @@ public final class LocalDeliveryServer: @unchecked Sendable {
         }
     }
 
+    public func dismiss(eventId: String) {
+        store.dismiss(eventId: eventId)
+    }
+
     private func startOnQueue() {
         guard listener == nil else { return }
 

@@ -1,6 +1,7 @@
 package com.mipopup.capture
 
 import android.app.Notification
+import android.os.PowerManager
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import org.json.JSONArray
@@ -21,6 +22,7 @@ class AppNotificationListenerService : NotificationListenerService() {
 
     private lateinit var outbox: LanOutboxStore
     private lateinit var identityStore: LanIdentityStore
+    private lateinit var captureWakeLock: PowerManager.WakeLock
 
     @Volatile
     private var lanSync: LanSyncCoordinator? = null
@@ -29,6 +31,9 @@ class AppNotificationListenerService : NotificationListenerService() {
         super.onCreate()
         outbox = LanOutboxStore(File(filesDir, LanOutboxStore.DIRECTORY_NAME))
         identityStore = LanIdentityStore(applicationContext)
+        captureWakeLock = getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:delivery-capture")
+            .apply { setReferenceCounted(false) }
     }
 
     override fun onListenerConnected() {
@@ -97,6 +102,10 @@ class AppNotificationListenerService : NotificationListenerService() {
         val progressMax = extras?.getInt(Notification.EXTRA_PROGRESS_MAX, 0) ?: 0
         val progressIndeterminate = extras?.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE, false) ?: false
         val groupSummary = (notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0
+        val focusParam = runCatching { extras?.getString(HyperOSFocusNotification.EXTRA_PARAM) }
+            .getOrNull()
+            ?.takeIf(String::isNotBlank)
+            ?.takeIf { it.length <= HyperOSFocusNotification.MAX_PARAM_LENGTH }
 
         val keyHash = sha256("${settings.keySalt}:${item.key}")
         val contentHash = sha256(
@@ -109,7 +118,8 @@ class AppNotificationListenerService : NotificationListenerService() {
                 tickerText,
                 progress,
                 progressMax,
-                progressIndeterminate
+                progressIndeterminate,
+                focusParam.orEmpty()
             )
         )
         val eventKind = synchronized(recentContent) {
@@ -141,6 +151,7 @@ class AppNotificationListenerService : NotificationListenerService() {
             .put("groupSummary", groupSummary)
             .put("ongoing", item.isOngoing)
             .put("clearable", item.isClearable)
+            .also { json -> focusParam?.let { json.put("focusParam", it) } }
 
         val deliveryUpdate = DeliveryNotificationParser.parse(
             DeliveryNotificationInput(
@@ -154,10 +165,12 @@ class AppNotificationListenerService : NotificationListenerService() {
                 bigText = bigText,
                 subText = subText,
                 textLines = textLines,
-                groupSummary = groupSummary
+                groupSummary = groupSummary,
+                focusParam = focusParam
             )
         )
         deliveryUpdate?.let { record.put("delivery", it.toJson()) }
+        if (deliveryUpdate != null) acquireCaptureWakeLock()
 
         writer.execute {
             val enqueued = deliveryUpdate?.let { update ->
@@ -189,6 +202,7 @@ class AppNotificationListenerService : NotificationListenerService() {
                 CaptureLogStore(applicationContext).append(record)
             } finally {
                 if (enqueued) lanSync?.kick()
+                if (deliveryUpdate != null) releaseCaptureWakeLock()
             }
         }
         return true
@@ -208,8 +222,21 @@ class AppNotificationListenerService : NotificationListenerService() {
         if (activeInstance === this) activeInstance = null
         lanSync?.close()
         lanSync = null
+        releaseCaptureWakeLock()
         writer.shutdown()
         super.onDestroy()
+    }
+
+    private fun acquireCaptureWakeLock() {
+        runCatching { captureWakeLock.acquire(CAPTURE_WAKE_LOCK_TIMEOUT_MILLIS) }
+    }
+
+    private fun releaseCaptureWakeLock() {
+        runCatching {
+            if (::captureWakeLock.isInitialized && captureWakeLock.isHeld) {
+                captureWakeLock.release()
+            }
+        }
     }
 
     private fun baseRecord(
@@ -246,6 +273,7 @@ class AppNotificationListenerService : NotificationListenerService() {
 
     companion object {
         private const val MAX_RECENT_EVENTS = 512
+        private const val CAPTURE_WAKE_LOCK_TIMEOUT_MILLIS = 15_000L
         private val RELEVANT_PACKAGE_HINTS = listOf("meituan", "sankuai", "taobao", "eleme", "miui", "systemui")
 
         @Volatile

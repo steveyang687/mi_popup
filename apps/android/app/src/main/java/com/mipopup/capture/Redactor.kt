@@ -30,8 +30,55 @@ object Redactor {
             }
             result.put("textLines", redactedLines)
         }
+        result.optString("focusParam").takeIf(String::isNotBlank)?.let { raw ->
+            result.put("focusParam", redactFocusParam(raw))
+        }
         return result
     }
 
+    private fun redactFocusParam(raw: String): String {
+        val root = runCatching { JSONObject(raw) }.getOrNull()
+            ?: return redactText(raw)
+        return redactJson(root, parentKey = null).toString()
+    }
+
+    private fun redactJson(value: Any?, parentKey: String?): Any? {
+        if (parentKey != null && SENSITIVE_FOCUS_KEYS.any(parentKey.lowercase()::contains)) {
+            return "[已脱敏]"
+        }
+        return when (value) {
+            is JSONObject -> JSONObject().also { output ->
+                value.keys().forEach { key -> output.put(key, redactJson(value.opt(key), key)) }
+            }
+            is JSONArray -> JSONArray().also { output ->
+                for (index in 0 until value.length()) {
+                    output.put(redactJson(value.opt(index), parentKey))
+                }
+            }
+            is String -> if (value.startsWith("http://") || value.startsWith("https://")) {
+                "[链接]"
+            } else {
+                redactText(value)
+            }
+            else -> value
+        }
+    }
+
     private val TEXT_FIELDS = listOf("title", "text", "bigText", "subText")
+    private val SENSITIVE_FOCUS_KEYS = listOf(
+        "authorization",
+        "cookie",
+        "credential",
+        "deeplink",
+        "intenturi",
+        "latitude",
+        "longitude",
+        "mobile",
+        "orderid",
+        "order_id",
+        "password",
+        "phone",
+        "secret",
+        "token"
+    )
 }

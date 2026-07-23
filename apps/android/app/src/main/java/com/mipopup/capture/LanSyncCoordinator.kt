@@ -8,6 +8,7 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.PowerManager
 import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -40,6 +41,10 @@ class LanSyncCoordinator(
     }
     private val connectivityManager =
         applicationContext.getSystemService(ConnectivityManager::class.java)
+    private val syncWakeLock = applicationContext
+        .getSystemService(PowerManager::class.java)
+        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "${applicationContext.packageName}:lan-sync")
+        .apply { setReferenceCounted(false) }
     private val tcpClient = LanTcpClient()
     private val started = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
@@ -85,6 +90,7 @@ class LanSyncCoordinator(
     }
 
     fun kick() {
+        acquireSyncWakeLock()
         dispatch {
             failureCount = 0
             if (attemptRunning) {
@@ -100,6 +106,7 @@ class LanSyncCoordinator(
         scheduledAttempt?.cancel(false)
         activeDiscovery?.cancel()
         tcpClient.shutdown()
+        releaseSyncWakeLock()
         if (networkCallbackRegistered) {
             runCatching { connectivityManager.unregisterNetworkCallback(networkCallback) }
             networkCallbackRegistered = false
@@ -113,6 +120,7 @@ class LanSyncCoordinator(
     }
 
     private fun networkChanged() {
+        acquireSyncWakeLock()
         dispatch {
             cachedEndpoint = null
             failureCount = 0
@@ -138,6 +146,7 @@ class LanSyncCoordinator(
                 pendingCount = 0,
                 message = "已同步，等待配送状态"
             )
+            releaseSyncWakeLock()
             return
         }
         if (attemptRunning) {
@@ -169,6 +178,7 @@ class LanSyncCoordinator(
 
     private fun attempt() {
         if (closed.get() || attemptRunning) return
+        acquireSyncWakeLock()
         val entries = runCatching { outbox.peek(LanOutboxStore.DEFAULT_BATCH_SIZE) }
             .getOrElse { error ->
                 LanSyncMonitor.update(
@@ -176,6 +186,7 @@ class LanSyncCoordinator(
                     pendingCount = safePendingCount(),
                     message = "无法读取待同步队列：${shortError(error)}"
                 )
+                releaseSyncWakeLock()
                 return
             }
         if (entries.isEmpty()) {
@@ -184,6 +195,7 @@ class LanSyncCoordinator(
                 pendingCount = 0,
                 message = "已同步，等待配送状态"
             )
+            releaseSyncWakeLock()
             return
         }
         if (!hasLanNetwork()) {
@@ -192,6 +204,7 @@ class LanSyncCoordinator(
                 pendingCount = safePendingCount(),
                 message = "待连接 Wi-Fi 后同步"
             )
+            releaseSyncWakeLock()
             return
         }
 
@@ -254,6 +267,7 @@ class LanSyncCoordinator(
 
         attemptRunning = false
         failureCount = 0
+        releaseSyncWakeLock()
         if (rerunRequested || pending > 0) {
             rerunRequested = false
             scheduleAttempt(delayMillis = 0L, replaceExisting = true)
@@ -271,6 +285,7 @@ class LanSyncCoordinator(
     private fun failAttempt(message: String) {
         attemptRunning = false
         cachedEndpoint = null
+        releaseSyncWakeLock()
         if (rerunRequested) {
             rerunRequested = false
             failureCount = 0
@@ -309,6 +324,16 @@ class LanSyncCoordinator(
     private fun safePendingCount(): Int =
         runCatching { outbox.pendingCount() }.getOrDefault(0)
 
+    private fun acquireSyncWakeLock() {
+        runCatching { syncWakeLock.acquire(SYNC_WAKE_LOCK_TIMEOUT_MILLIS) }
+    }
+
+    private fun releaseSyncWakeLock() {
+        runCatching {
+            if (syncWakeLock.isHeld) syncWakeLock.release()
+        }
+    }
+
     private fun dispatch(action: () -> Unit) {
         if (closed.get()) return
         try {
@@ -322,6 +347,7 @@ class LanSyncCoordinator(
 
     companion object {
         private const val NETWORK_SETTLE_MILLIS = 300L
+        private const val SYNC_WAKE_LOCK_TIMEOUT_MILLIS = 15_000L
 
         private fun shortError(error: Throwable): String =
             error.localizedMessage?.take(160)

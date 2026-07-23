@@ -6,7 +6,9 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.view.Gravity
@@ -89,6 +91,24 @@ class MainActivity : Activity() {
             }
         }.withMargin(top = 8))
 
+        content.addView(button("4. 允许锁屏后台同步") {
+            requestLockScreenSyncPermission()
+        }.withMargin(top = 8))
+
+        content.addView(button("打开 MiPopup 应用设置") {
+            startActivity(Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:$packageName")
+            ))
+        }.withMargin(top = 8))
+
+        content.addView(label(
+            "HyperOS 还需在应用设置中将电量策略设为“无限制”，并允许应用自启动，否则系统仍可能在锁屏后暂停通知监听和局域网访问。",
+            12f,
+            false,
+            Color.GRAY
+        ).withMargin(top = 8))
+
         content.addView(label("目标应用包名（每行一个）", 15f, true, Color.WHITE).withMargin(top = 24))
         packageEditor = EditText(this).apply {
             setText(CaptureSettings(this@MainActivity).targetPackages.sorted().joinToString("\n"))
@@ -110,7 +130,7 @@ class MainActivity : Activity() {
             }
         }.withMargin(top = 8))
 
-        content.addView(button("4. 导出脱敏 JSONL") { chooseExportTarget() }.withMargin(top = 20))
+        content.addView(button("5. 导出脱敏 JSONL") { chooseExportTarget() }.withMargin(top = 20))
         content.addView(button("刷新日志预览") { refresh() }.withMargin(top = 8))
         content.addView(button("清空本地日志") {
             worker.execute {
@@ -137,6 +157,7 @@ class MainActivity : Activity() {
 
     private fun refresh() {
         val enabled = isListenerEnabled()
+        val lockScreenSyncAllowed = isIgnoringBatteryOptimizations()
         val activeScan = AppNotificationListenerService.lastActiveScanResult()
         worker.execute {
             val store = CaptureLogStore(this)
@@ -153,6 +174,7 @@ class MainActivity : Activity() {
                     append(" · ${formatBytes(snapshot.totalBytes)}")
                     append(" · ${snapshot.fileCount} 个日志文件")
                     append("\n局域网同步：${formatLanPhase(lanSync.phase)} · 待发送 $pending 条")
+                    append(if (lockScreenSyncAllowed) "\n锁屏同步：系统省电限制已关闭" else "\n锁屏同步：受系统省电限制")
                     append("\n${lanSync.message}")
                     lanSync.lastAcknowledgedAt?.let {
                         append("\n最近确认：${formatTime(it)}")
@@ -223,6 +245,27 @@ class MainActivity : Activity() {
         val expected = listenerComponent().flattenToString()
         val enabled = Settings.Secure.getString(contentResolver, "enabled_notification_listeners").orEmpty()
         return enabled.split(':').any { it.equals(expected, ignoreCase = true) }
+    }
+
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+        val powerManager = getSystemService(PowerManager::class.java)
+        return powerManager.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    private fun requestLockScreenSyncPermission() {
+        if (isIgnoringBatteryOptimizations()) {
+            toast("系统省电限制已经关闭；请再确认 HyperOS 自启动和电量策略为无限制")
+            return
+        }
+        val request = Intent(
+            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+            Uri.parse("package:$packageName")
+        )
+        runCatching { startActivity(request) }
+            .onFailure {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }
     }
 
     private fun listenerComponent() = ComponentName(this, AppNotificationListenerService::class.java)

@@ -7,6 +7,7 @@ public final class RecentDeliveryStore: @unchecked Sendable {
     private struct State: Codable {
         var recentEventIds: [String]
         var latestDelivery: DeliveryUpdate?
+        var dismissedEventId: String?
     }
 
     private let defaults: UserDefaults
@@ -30,17 +31,28 @@ public final class RecentDeliveryStore: @unchecked Sendable {
         let ids = Array((restored?.recentEventIds ?? []).suffix(self.capacity))
         state = State(
             recentEventIds: ids,
-            latestDelivery: restored?.latestDelivery
+            latestDelivery: restored?.latestDelivery,
+            dismissedEventId: restored?.dismissedEventId
         )
         recentEventIdSet = Set(ids)
     }
 
     public var latestDelivery: DeliveryUpdate? {
-        withLock { state.latestDelivery }
+        withLock {
+            guard state.latestDelivery?.eventId != state.dismissedEventId else { return nil }
+            return state.latestDelivery
+        }
     }
 
     public func contains(eventId: String) -> Bool {
         withLock { recentEventIdSet.contains(eventId) }
+    }
+
+    public func dismiss(eventId: String) {
+        withLock {
+            state.dismissedEventId = eventId
+            persist()
+        }
     }
 
     @discardableResult
@@ -60,6 +72,9 @@ public final class RecentDeliveryStore: @unchecked Sendable {
             if state.latestDelivery == nil
                 || update.capturedAt >= (state.latestDelivery?.capturedAt ?? 0) {
                 state.latestDelivery = update
+                if state.dismissedEventId != update.eventId {
+                    state.dismissedEventId = nil
+                }
             }
             persist()
             return true

@@ -11,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let panelController = NotchPanelController()
         panelController.onImportRequest = { [weak self] in self?.chooseLogFile() }
+        panelController.onDismissDelivery = { [weak self] eventId in
+            self?.localDeliveryServer?.dismiss(eventId: eventId)
+        }
         self.panelController = panelController
         let server = LocalDeliveryServer(
             onStateChange: { state in

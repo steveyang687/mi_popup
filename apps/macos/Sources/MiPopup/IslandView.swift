@@ -9,6 +9,8 @@ struct IslandView: View {
     let onTabChange: (IslandTab) -> Void
     let onRefresh: () -> Void
     let onImport: () -> Void
+    let onDismissDelivery: () -> Void
+    let onQuit: () -> Void
     let onDropFile: (URL) -> Void
 
     var body: some View {
@@ -65,21 +67,41 @@ struct IslandView: View {
             Group {
                 if model.notchReservedWidth > 0 {
                     HStack(spacing: 0) {
-                        statusContent(showTitle: model.expanded)
-                            .padding(.leading, 16)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Group {
+                            if !model.expanded, let delivery = model.latestDelivery {
+                                collapsedDeliveryStatus(delivery)
+                            } else {
+                                statusContent(showTitle: model.expanded)
+                            }
+                        }
+                        .padding(.leading, 16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         Color.clear
                             .frame(width: model.notchReservedWidth)
-                        Image(systemName: model.expanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.55))
-                            .padding(.trailing, 16)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
+                        HStack(spacing: 7) {
+                            if !model.expanded,
+                               let eta = model.latestDelivery?.etaText {
+                                collapsedDeliveryETA(eta)
+                            }
+                            Image(systemName: model.expanded ? "chevron.up" : "chevron.down")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.55))
+                        }
+                        .padding(.trailing, 16)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                     }
                 } else {
                     HStack(spacing: 10) {
-                        statusContent(showTitle: true)
+                        if !model.expanded, let delivery = model.latestDelivery {
+                            collapsedDeliveryStatus(delivery)
+                        } else {
+                            statusContent(showTitle: true)
+                        }
                         Spacer(minLength: 4)
+                        if !model.expanded,
+                           let eta = model.latestDelivery?.etaText {
+                            collapsedDeliveryETA(eta)
+                        }
                         Image(systemName: model.expanded ? "chevron.up" : "chevron.down")
                             .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(.white.opacity(0.55))
@@ -93,12 +115,40 @@ struct IslandView: View {
         .buttonStyle(.plain)
     }
 
+    private func collapsedDeliveryStatus(_ delivery: DeliveryUpdate) -> some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(Color.orange)
+                .frame(width: 8, height: 8)
+                .shadow(color: Color.orange.opacity(0.7), radius: 5)
+            Text("\(delivery.provider.displayName) · \(delivery.stage.displayName)")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+    }
+
+    private func collapsedDeliveryETA(_ eta: String) -> some View {
+        Text(deliveryETAText(eta))
+            .font(.system(size: 11, weight: .bold, design: .rounded))
+            .foregroundStyle(.orange)
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+    }
+
+    private func deliveryETAText(_ eta: String) -> String {
+        eta.contains("送达") ? eta : "\(eta)送达"
+    }
+
     private func statusContent(showTitle: Bool) -> some View {
         HStack(spacing: 10) {
-            Circle()
-                .fill(model.hasError ? Color.red : Color.orange)
-                .frame(width: 8, height: 8)
-                .shadow(color: (model.hasError ? Color.red : Color.orange).opacity(0.7), radius: 5)
+            if model.latestDelivery != nil {
+                Circle()
+                    .fill(Color.orange)
+                    .frame(width: 8, height: 8)
+                    .shadow(color: Color.orange.opacity(0.7), radius: 5)
+            }
             if showTitle {
                 Text(model.headerTitle)
                     .font(.system(size: 14, weight: .semibold))
@@ -165,42 +215,68 @@ struct IslandView: View {
     }
 
     private func deliveryCard(_ delivery: DeliveryUpdate) -> some View {
-        HStack(spacing: 9) {
-            Image(systemName: "takeoutbag.and.cup.and.straw.fill")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.orange)
-                .frame(width: 24, height: 24)
-                .background(Color.orange.opacity(0.13), in: Circle())
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 9) {
+                Image(systemName: "takeoutbag.and.cup.and.straw.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.orange)
+                    .frame(width: 24, height: 24)
+                    .background(Color.orange.opacity(0.13), in: Circle())
 
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 5) {
-                    Text(delivery.provider.displayName)
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.white)
-                    Text(delivery.stage.displayName)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 5) {
+                        Text(delivery.provider.displayName)
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                        Text(delivery.stage.displayName)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.orange)
+                    }
+                    Text(delivery.statusDetail ?? model.latestText)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.58))
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.78)
                 }
-                Text(model.latestText)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.52))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-            }
 
-            Spacer(minLength: 4)
+                Spacer(minLength: 4)
 
-            VStack(alignment: .trailing, spacing: 1) {
-                if let eta = delivery.etaText {
-                    Text(eta)
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundStyle(.green)
+                VStack(alignment: .trailing, spacing: 2) {
+                    if let eta = delivery.etaText {
+                        Text(eta)
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundStyle(.green)
+                            .lineLimit(1)
+                    }
+                    Text(delivery.sourceFormat?.displayName ?? model.deliverySourceText)
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.38))
                         .lineLimit(1)
                 }
-                Text(model.deliverySourceText)
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.38))
-                    .lineLimit(1)
+
+                Button(action: onDismissDelivery) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.52))
+                        .frame(width: 20, height: 20)
+                        .background(Color.white.opacity(0.07), in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("关闭当前配送状态，下一次更新时重新显示")
+            }
+
+            if let progress = delivery.progressPercent {
+                HStack(spacing: 7) {
+                    ProgressView(value: Double(progress), total: 100)
+                        .progressViewStyle(.linear)
+                        .tint(.orange)
+                        .controlSize(.mini)
+                    Text("\(progress)%")
+                        .font(.system(size: 8, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.42))
+                        .frame(width: 25, alignment: .trailing)
+                }
             }
         }
         .padding(.horizontal, 10)
@@ -326,8 +402,9 @@ struct IslandView: View {
                 .foregroundStyle(.white.opacity(0.38))
             Text(formatScore(record.score))
                 .font(.system(size: 13, weight: .bold, design: .rounded))
+                .monospacedDigit()
                 .foregroundStyle(intelligenceColor(record.score))
-                .frame(width: 34, alignment: .trailing)
+                .frame(width: 48, alignment: .trailing)
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 5)
@@ -373,6 +450,20 @@ struct IslandView: View {
                 .buttonStyle(.plain)
                 .help("导入 Android 通知日志")
             }
+
+            Button(action: onQuit) {
+                HStack(spacing: 5) {
+                    Image(systemName: "power")
+                    Text("退出")
+                }
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.red.opacity(0.82))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(Color.red.opacity(0.09), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("退出 MiPopup")
         }
         .font(.system(size: 10))
         .foregroundStyle(.white.opacity(0.5))

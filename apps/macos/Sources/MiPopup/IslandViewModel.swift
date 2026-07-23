@@ -56,6 +56,9 @@ final class IslandViewModel: ObservableObject {
 
     var headerTitle: String {
         if let delivery = latestDelivery {
+            if let eta = delivery.etaText {
+                return "\(delivery.provider.displayName) · \(eta)送达"
+            }
             return "\(delivery.provider.displayName) · \(delivery.stage.displayName)"
         }
         guard expanded, selectedTab == .models else { return statusTitle }
@@ -154,7 +157,7 @@ final class IslandViewModel: ObservableObject {
     }
 
     @discardableResult
-    func apply(delivery update: DeliveryUpdate, source: String, expand: Bool) -> Bool {
+    func apply(delivery update: DeliveryUpdate, source: String) -> Bool {
         if let current = latestDelivery, current.capturedAt > update.capturedAt {
             return false
         }
@@ -165,9 +168,6 @@ final class IslandViewModel: ObservableObject {
         latestText = deliveryDescription(update)
         selectedTab = .quota
         hasError = false
-        if expand {
-            expanded = true
-        }
         return true
     }
 
@@ -180,6 +180,15 @@ final class IslandViewModel: ObservableObject {
         expanded = true
     }
 
+    @discardableResult
+    func dismissLatestDelivery() -> String? {
+        guard let delivery = latestDelivery else { return nil }
+        latestDelivery = nil
+        latestText = "当前配送状态已隐藏，等待下一次更新"
+        updateQuotaHeader()
+        return delivery.eventId
+    }
+
     private func latestDescription(_ event: CapturedNotification?) -> String {
         guard let event else { return "没有可显示的通知内容" }
         let content = [event.title, event.text, event.bigText]
@@ -190,7 +199,7 @@ final class IslandViewModel: ObservableObject {
     }
 
     private func deliveryDescription(_ update: DeliveryUpdate) -> String {
-        var parts = [update.statusText]
+        var parts = [update.statusDetail ?? update.statusText]
         if let eta = update.etaText, !parts.contains(where: { $0.contains(eta) }) {
             parts.append("预计 \(eta)")
         }

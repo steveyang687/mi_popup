@@ -40,6 +40,18 @@ public enum DeliveryStage: String, Codable, Sendable, Equatable {
     }
 }
 
+public enum DeliverySourceFormat: String, Codable, Sendable, Equatable {
+    case standardNotification = "standard_notification"
+    case hyperOSFocus = "hyperos_focus"
+
+    public var displayName: String {
+        switch self {
+        case .standardNotification: "Android 通知"
+        case .hyperOSFocus: "HyperOS 焦点"
+        }
+    }
+}
+
 public struct DeliveryUpdate: Codable, Sendable, Equatable {
     public let schemaVersion: Int
     public let parserVersion: Int
@@ -50,6 +62,9 @@ public struct DeliveryUpdate: Codable, Sendable, Equatable {
     public let stage: DeliveryStage
     public let statusText: String
     public let etaText: String?
+    public let statusDetail: String?
+    public let progressPercent: Int?
+    public let sourceFormat: DeliverySourceFormat?
     public let confidence: Double
     public let orderKey: String
     public let sourcePackage: String
@@ -64,6 +79,9 @@ public struct DeliveryUpdate: Codable, Sendable, Equatable {
         case stage = "state"
         case statusText
         case etaText
+        case statusDetail
+        case progressPercent
+        case sourceFormat
         case confidence
         case orderKey
         case sourcePackage
@@ -79,6 +97,9 @@ public struct DeliveryUpdate: Codable, Sendable, Equatable {
         stage: DeliveryStage,
         statusText: String,
         etaText: String?,
+        statusDetail: String? = nil,
+        progressPercent: Int? = nil,
+        sourceFormat: DeliverySourceFormat? = nil,
         confidence: Double,
         orderKey: String,
         sourcePackage: String
@@ -92,6 +113,9 @@ public struct DeliveryUpdate: Codable, Sendable, Equatable {
         self.stage = stage
         self.statusText = statusText
         self.etaText = etaText
+        self.statusDetail = statusDetail
+        self.progressPercent = progressPercent
+        self.sourceFormat = sourceFormat
         self.confidence = confidence
         self.orderKey = orderKey
         self.sourcePackage = sourcePackage
@@ -138,6 +162,7 @@ public enum DeliveryNotificationParser {
             stage: stage,
             statusText: stage.displayName,
             etaText: extractETA(from: content),
+            sourceFormat: .standardNotification,
             confidence: stage == .unknown ? 0.95 : 0.85,
             orderKey: notification.notificationKeyHash,
             sourcePackage: notification.sourcePackage

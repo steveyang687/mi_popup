@@ -6,6 +6,7 @@ import SwiftUI
 @MainActor
 final class NotchPanelController: NSWindowController {
     var onImportRequest: (() -> Void)?
+    var onDismissDelivery: ((String) -> Void)?
 
     private let model = IslandViewModel()
     private let quotaProviders: [any SubscriptionQuotaProviding] = [
@@ -18,12 +19,14 @@ final class NotchPanelController: NSWindowController {
     private var immediateRefreshTask: Task<Void, Never>?
     private var hoverCollapseTask: Task<Void, Never>?
     private var manualCollapseReleaseTask: Task<Void, Never>?
+    private var fullscreenVisibilityTask: Task<Void, Never>?
     nonisolated(unsafe) private var frameDisplayLink: CADisplayLink?
     private var frameAnimation: PanelFrameAnimation?
     private var islandContainerView: IslandHostingContainerView?
     private var islandHostingView: NSView?
     private var isPointerInside = false
     private var isManuallyCollapsedWhileHovered = false
+    private var isHiddenForFullscreen = false
 
     convenience init() {
         let panel = TopAnchoredPanel(
@@ -35,6 +38,7 @@ final class NotchPanelController: NSWindowController {
         self.init(window: panel)
         configure(panel)
         installContent(in: panel)
+        observeWorkspaceChanges()
         restoreCachedQuotaSnapshots()
         startQuotaRefreshLoop()
     }
@@ -45,10 +49,18 @@ final class NotchPanelController: NSWindowController {
         immediateRefreshTask?.cancel()
         hoverCollapseTask?.cancel()
         manualCollapseReleaseTask?.cancel()
+        fullscreenVisibilityTask?.cancel()
         frameDisplayLink?.invalidate()
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
     func show() {
+        guard let screen = preferredScreen(), !frontmostApplicationIsFullscreen(on: screen) else {
+            isHiddenForFullscreen = true
+            window?.orderOut(nil)
+            return
+        }
+        isHiddenForFullscreen = false
         reposition()
         window?.orderFrontRegardless()
     }
@@ -81,20 +93,83 @@ final class NotchPanelController: NSWindowController {
     func receive(delivery update: DeliveryUpdate, restoreOnly: Bool = false) {
         guard model.apply(
             delivery: update,
-            source: restoreOnly ? "Android · 上次局域网同步" : "Android · 局域网实时同步",
-            expand: !restoreOnly
+            source: restoreOnly ? "Android · 上次局域网同步" : "Android · 局域网实时同步"
         ) else { return }
 
         guard !restoreOnly else { return }
-        hoverCollapseTask?.cancel()
-        hoverCollapseTask = nil
-        manualCollapseReleaseTask?.cancel()
-        manualCollapseReleaseTask = nil
-        isManuallyCollapsedWhileHovered = false
         resize(animated: true)
         show()
-        if !isPointerInside {
-            scheduleAutomaticCollapse()
+    }
+
+    private func observeWorkspaceChanges() {
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(
+            self,
+            selector: #selector(activeSpaceDidChange),
+            name: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil
+        )
+        center.addObserver(
+            self,
+            selector: #selector(frontmostApplicationDidChange),
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: nil
+        )
+    }
+
+    @objc private func activeSpaceDidChange(_ notification: Notification) {
+        scheduleFullscreenVisibilityCheck()
+    }
+
+    @objc private func frontmostApplicationDidChange(_ notification: Notification) {
+        scheduleFullscreenVisibilityCheck()
+    }
+
+    private func scheduleFullscreenVisibilityCheck() {
+        fullscreenVisibilityTask?.cancel()
+        fullscreenVisibilityTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            self?.updateFullscreenVisibility()
+        }
+    }
+
+    private func updateFullscreenVisibility() {
+        guard let screen = preferredScreen() else { return }
+        if frontmostApplicationIsFullscreen(on: screen) {
+            isHiddenForFullscreen = true
+            window?.orderOut(nil)
+            return
+        }
+        guard isHiddenForFullscreen else { return }
+        isHiddenForFullscreen = false
+        reposition()
+        window?.orderFrontRegardless()
+    }
+
+    private func frontmostApplicationIsFullscreen(on screen: NSScreen) -> Bool {
+        guard let processIdentifier = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+              let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+              let windowList = CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements],
+                kCGNullWindowID
+              ) as? [[String: Any]] else {
+            return false
+        }
+
+        let displayBounds = CGDisplayBounds(CGDirectDisplayID(screenNumber.uint32Value))
+        let tolerance: CGFloat = 2
+        return windowList.contains { windowInfo in
+            guard (windowInfo[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == processIdentifier,
+                  (windowInfo[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  let boundsDictionary = windowInfo[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary) else {
+                return false
+            }
+            return abs(bounds.minX - displayBounds.minX) <= tolerance
+                && abs(bounds.minY - displayBounds.minY) <= tolerance
+                && abs(bounds.width - displayBounds.width) <= tolerance
+                && abs(bounds.height - displayBounds.height) <= tolerance
         }
     }
 
@@ -115,7 +190,8 @@ final class NotchPanelController: NSWindowController {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 1)
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        // Omitting fullScreenAuxiliary keeps the island out of native full-screen Spaces.
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary]
         panel.hidesOnDeactivate = false
         panel.isMovable = false
         panel.isMovableByWindowBackground = false
@@ -131,6 +207,8 @@ final class NotchPanelController: NSWindowController {
             onTabChange: { [weak self] _ in self?.resize(animated: true) },
             onRefresh: { [weak self] in self?.refreshQuotas() },
             onImport: { [weak self] in self?.onImportRequest?() },
+            onDismissDelivery: { [weak self] in self?.dismissCurrentDelivery() },
+            onQuit: { NSApp.terminate(nil) },
             onDropFile: { [weak self] url in self?.importLog(at: url) }
         )
         let hostingView = NSHostingView(rootView: root)
@@ -153,6 +231,12 @@ final class NotchPanelController: NSWindowController {
         manualCollapseReleaseTask = nil
         isManuallyCollapsedWhileHovered = model.expanded ? isPointerInside : false
         model.expanded.toggle()
+        resize(animated: true)
+    }
+
+    private func dismissCurrentDelivery() {
+        guard let eventId = model.dismissLatestDelivery() else { return }
+        onDismissDelivery?(eventId)
         resize(animated: true)
     }
 
@@ -471,13 +555,17 @@ final class NotchPanelController: NSWindowController {
             model.collapsedHeight = collapsedHeight
         }
 
-        let collapsedSize = NSSize(width: Self.collapsedSize.width, height: collapsedHeight)
+        let collapsedWidth = model.latestDelivery == nil ? Self.collapsedSize.width : 360
+        let collapsedSize = NSSize(width: collapsedWidth, height: collapsedHeight)
         let baseSize = model.expanded ? expandedSize : collapsedSize
+        let visibleWidthPerSide: CGFloat = model.expanded
+            ? 150
+            : (model.latestDelivery == nil ? 46 : 126)
         return NSSize(
             width: NotchGeometry.panelWidth(
                 baseWidth: baseSize.width,
                 reservedWidth: reservedWidth,
-                visibleWidthPerSide: model.expanded ? 150 : 46
+                visibleWidthPerSide: visibleWidthPerSide
             ),
             height: baseSize.height
         )
@@ -488,7 +576,7 @@ final class NotchPanelController: NSWindowController {
         switch model.selectedTab {
         case .quota:
             height = 302
-                + (model.latestDelivery == nil ? 0 : 54)
+                + (model.latestDelivery == nil ? 0 : (model.latestDelivery?.progressPercent == nil ? 58 : 72))
                 + (model.eventCount == 0 ? 0 : 18)
         case .models:
             height = 334

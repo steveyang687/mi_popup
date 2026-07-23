@@ -68,6 +68,8 @@ public enum DeliveryWireValidationError: LocalizedError, Equatable {
     case invalidCapturedAt
     case invalidStatusText
     case invalidEtaText
+    case invalidStatusDetail
+    case invalidProgressPercent
     case invalidConfidence
     case invalidOrderKey
     case invalidSourcePackage
@@ -102,6 +104,10 @@ public enum DeliveryWireValidationError: LocalizedError, Equatable {
             "配送状态文案无效。"
         case .invalidEtaText:
             "预计送达时间无效。"
+        case .invalidStatusDetail:
+            "配送状态详情无效。"
+        case .invalidProgressPercent:
+            "配送进度无效。"
         case .invalidConfidence:
             "配送状态置信度无效。"
         case .invalidOrderKey:
@@ -141,6 +147,9 @@ public enum DeliveryWireCodec {
                 "state",
                 "statusText",
                 "etaText",
+                "statusDetail",
+                "progressPercent",
+                "sourceFormat",
                 "confidence",
                 "orderKey",
                 "sourcePackage",
@@ -209,6 +218,14 @@ public enum DeliveryWireValidator {
                   trimmed.rangeOfCharacter(from: .controlCharacters) == nil else {
                 throw DeliveryWireValidationError.invalidEtaText
             }
+        }
+        if let detail = update.statusDetail {
+            guard isBoundedNonempty(detail, maximumLength: 160) else {
+                throw DeliveryWireValidationError.invalidStatusDetail
+            }
+        }
+        if let progress = update.progressPercent, !(0 ... 100).contains(progress) {
+            throw DeliveryWireValidationError.invalidProgressPercent
         }
         guard update.confidence.isFinite, (0 ... 1).contains(update.confidence) else {
             throw DeliveryWireValidationError.invalidConfidence
