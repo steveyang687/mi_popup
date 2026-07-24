@@ -1,9 +1,147 @@
+import CryptoKit
 import Foundation
 import MiPopupCore
 @testable import MiPopupLAN
 import Testing
 
 struct MiPopupLANTests {
+    @Test
+    func decryptsAndroidCompatibleRelayEnvelope() throws {
+        let keyData = Data((1 ... 32).map(UInt8.init))
+        let configuration = try relayConfiguration(keyData: keyData)
+        let update = deliveryUpdate(capturedAt: 2)
+        let envelope = DeliveryUpdateEnvelope(
+            deviceId: "a0b1c2d3-e4f5-4678-9123-abcdefabcdef",
+            sequence: 7,
+            sentAt: 40,
+            payload: update
+        )
+        let plaintext = try JSONEncoder().encode(envelope)
+        let template = RelayWireEvent(
+            version: 1,
+            channelId: "personal_channel_01",
+            eventId: update.eventId,
+            sequence: 7,
+            sentAt: 42,
+            nonce: Data(repeating: 3, count: 12).base64EncodedString(),
+            ciphertext: ""
+        )
+        let sealed = try AES.GCM.seal(
+            plaintext,
+            using: SymmetricKey(data: keyData),
+            nonce: try AES.GCM.Nonce(data: Data(repeating: 3, count: 12)),
+            authenticating: RelayWireCodec.authenticatedData(for: template)
+        )
+        var combined = sealed.ciphertext
+        combined.append(sealed.tag)
+        let event = RelayWireEvent(
+            version: template.version,
+            channelId: template.channelId,
+            eventId: template.eventId,
+            sequence: template.sequence,
+            sentAt: template.sentAt,
+            nonce: template.nonce,
+            ciphertext: combined.base64EncodedString()
+        )
+
+        let decoded = try RelayWireCodec.decrypt(
+            JSONEncoder().encode(event),
+            configuration: configuration
+        )
+
+        #expect(decoded.envelope.payload == update)
+        #expect(decoded.relay.eventId == update.eventId)
+    }
+
+    @Test
+    func rejectsRelayMetadataTampering() throws {
+        let keyData = Data((1 ... 32).map(UInt8.init))
+        let configuration = try relayConfiguration(keyData: keyData)
+        let event = RelayWireEvent(
+            version: 1,
+            channelId: "personal_channel_01",
+            eventId: "11111111-1111-4111-8111-111111111111",
+            sequence: 7,
+            sentAt: 42,
+            nonce: Data(repeating: 3, count: 12).base64EncodedString(),
+            ciphertext: Data(repeating: 4, count: 32).base64EncodedString()
+        )
+
+        #expect(throws: RelayWireError.invalidCiphertext) {
+            try RelayWireCodec.decrypt(
+                JSONEncoder().encode(event),
+                configuration: configuration
+            )
+        }
+    }
+
+    @Test
+    func rejectsInsecureRelayConfiguration() throws {
+        let key = Data(repeating: 1, count: 32).base64EncodedString()
+        let json = """
+        {
+          "baseURL": "http://relay.example.com",
+          "channelId": "personal_channel_01",
+          "token": "token-that-is-longer-than-thirty-two-characters",
+          "encryptionKey": "\(key)"
+        }
+        """
+
+        #expect(throws: RelayConfigurationError.insecureBaseURL) {
+            try RelayConfiguration.decode(Data(json.utf8))
+        }
+    }
+
+    @Test
+    func rejectsWorldReadableRelayConfigurationFile() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MiPopupRelayConfig-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("relay-config.json")
+        let key = Data(repeating: 1, count: 32).base64EncodedString()
+        let json = """
+        {
+          "baseURL": "https://relay.example.com",
+          "channelId": "personal_channel_01",
+          "token": "token-that-is-longer-than-thirty-two-characters",
+          "encryptionKey": "\(key)"
+        }
+        """
+        try Data(json.utf8).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+
+        #expect(throws: RelayConfigurationError.insecureFilePermissions) {
+            try RelayConfiguration.load(from: file)
+        }
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        #expect(try RelayConfiguration.load(from: file) != nil)
+    }
+
+    @Test @MainActor
+    func externalRelayIngestUsesTheSharedRecentDeliveryStore() async throws {
+        let suiteName = "MiPopupRelayIngestTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = RecentDeliveryStore(defaults: defaults, key: "relay-ingest")
+        var deliveredCount = 0
+        let server = LocalDeliveryServer(
+            advertiseBonjour: false,
+            store: store,
+            onDelivery: { _ in deliveredCount += 1 }
+        )
+        let update = deliveryUpdate(capturedAt: 2)
+
+        let first = await server.ingest(update)
+        let duplicate = await server.ingest(update)
+
+        #expect(first == .accepted)
+        #expect(duplicate == .duplicate)
+        #expect(deliveredCount == 1)
+        #expect(store.latestDelivery == update)
+    }
+
     @Test
     func decodesFragmentedAndAdjacentLengthPrefixedFrames() throws {
         let firstPayload = Data(#"{"message":"first"}"#.utf8)
@@ -304,6 +442,18 @@ struct MiPopupLANTests {
             orderKey: "order-key",
             sourcePackage: "com.sankuai.meituan"
         )
+    }
+
+    private func relayConfiguration(keyData: Data) throws -> RelayConfiguration {
+        let json = """
+        {
+          "baseURL": "https://relay.example.com",
+          "channelId": "personal_channel_01",
+          "token": "token-that-is-longer-than-thirty-two-characters",
+          "encryptionKey": "\(keyData.base64EncodedString())"
+        }
+        """
+        return try RelayConfiguration.decode(Data(json.utf8))
     }
 
     private var deliveryUpdateJSON: String {

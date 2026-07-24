@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
+import android.text.InputType
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
@@ -30,6 +31,7 @@ class MainActivity : Activity() {
     private lateinit var statusText: TextView
     private lateinit var previewText: TextView
     private lateinit var packageEditor: EditText
+    private lateinit var relayEditor: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,7 +66,7 @@ class MainActivity : Activity() {
 
         content.addView(label("MiPopup 通知采集", 26f, true, Color.WHITE))
         content.addView(label(
-            "原始通知仅保存在手机；解析后的配送状态会直接发送到同一局域网内的 Mac，不使用服务器或跨网传输。当前内测通道尚未配对加密，请仅在可信网络使用。",
+            "原始通知仅保存在手机。解析后的最小配送状态优先直连同一局域网内的 Mac；配置个人中继后，也会使用端到端加密跨网同步，中继服务器无法读取状态正文。",
             14f,
             false,
             Color.LTGRAY
@@ -130,6 +132,29 @@ class MainActivity : Activity() {
             }
         }.withMargin(top = 8))
 
+        content.addView(label("个人 VPS 中继（可选）", 15f, true, Color.WHITE).withMargin(top = 24))
+        content.addView(label(
+            "粘贴部署脚本生成的完整客户端 JSON。凭据会由 Android Keystore 加密保存；界面不会回显 token 或内容密钥。",
+            12f,
+            false,
+            Color.GRAY
+        ).withMargin(top = 6))
+        relayEditor = EditText(this).apply {
+            hint = "{\n  \"baseURL\": \"https://relay.example.com\",\n  \"channelId\": \"...\",\n  \"token\": \"...\",\n  \"encryptionKey\": \"...\"\n}"
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.DKGRAY)
+            setBackgroundColor(Color.rgb(37, 39, 45))
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            minLines = 6
+            gravity = Gravity.TOP
+            inputType = InputType.TYPE_CLASS_TEXT or
+                InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        }
+        content.addView(relayEditor.withMargin(top = 8))
+        content.addView(button("保存中继配置并立即同步") { saveRelayConfiguration() }.withMargin(top = 8))
+        content.addView(button("删除中继配置") { clearRelayConfiguration() }.withMargin(top = 8))
+
         content.addView(button("5. 导出脱敏 JSONL") { chooseExportTarget() }.withMargin(top = 20))
         content.addView(button("刷新日志预览") { refresh() }.withMargin(top = 8))
         content.addView(button("清空本地日志") {
@@ -147,7 +172,7 @@ class MainActivity : Activity() {
         content.addView(card(previewText).withMargin(top = 8))
 
         content.addView(label(
-            "采集范围：标题、正文、展开正文、子标题、文本行、通知渠道及时间。原始日志仅存于应用私有目录，保留 7 天且最多 20 MiB；导出时自动脱敏。局域网同步只发送解析后的状态、时间和不可逆订单关联值，不发送原始通知正文。",
+            "采集范围：标题、正文、展开正文、子标题、文本行、通知渠道及时间。原始日志仅存于应用私有目录，保留 7 天且最多 20 MiB；导出时自动脱敏。网络同步只发送解析后的状态、时间和不可逆订单关联值，不发送原始通知正文。",
             12f,
             false,
             Color.GRAY
@@ -167,6 +192,11 @@ class MainActivity : Activity() {
                 File(filesDir, LanOutboxStore.DIRECTORY_NAME)
             ).pendingCount()
             val lanSync = LanSyncMonitor.snapshot()
+            val relayConfigured = RelaySettings(this).load() != null
+            val relayPending = LanOutboxStore(
+                File(filesDir, RelayProtocol.OUTBOX_DIRECTORY_NAME)
+            ).pendingCount()
+            val relaySync = RelaySyncMonitor.snapshot()
             runOnUiThread {
                 statusText.text = buildString {
                     append(if (enabled) "● 通知读取权限已开启" else "○ 通知读取权限未开启")
@@ -178,6 +208,12 @@ class MainActivity : Activity() {
                     append("\n${lanSync.message}")
                     lanSync.lastAcknowledgedAt?.let {
                         append("\n最近确认：${formatTime(it)}")
+                    }
+                    append("\n公网中继：${if (relayConfigured) formatRelayPhase(relaySync.phase) else "未配置"}")
+                    append(" · 待发送 $relayPending 条")
+                    append("\n${relaySync.message}")
+                    relaySync.lastAcknowledgedAt?.let {
+                        append("\n中继最近确认：${formatTime(it)}")
                     }
                     if (activeScan != null) {
                         append("\n活动扫描：系统 ${activeScan.totalCount} 条 · 目标 ${activeScan.targetCount} 条")
@@ -214,6 +250,44 @@ class MainActivity : Activity() {
         }
         toast(message)
         statusText.postDelayed({ refresh() }, 500)
+    }
+
+    private fun saveRelayConfiguration() {
+        val raw = relayEditor.text.toString().trim()
+        if (raw.isEmpty()) {
+            toast("请先粘贴完整的中继客户端 JSON")
+            return
+        }
+        worker.execute {
+            val result = runCatching {
+                val configuration = RelayProtocol.parseConfiguration(raw)
+                RelaySettings(this).save(configuration)
+                AppNotificationListenerService.requestRelaySyncReload()
+            }
+            runOnUiThread {
+                result.onSuccess {
+                    relayEditor.text.clear()
+                    toast("中继配置已加密保存，已请求同步")
+                    refresh()
+                }.onFailure { toast("保存失败：${it.localizedMessage ?: it.javaClass.simpleName}") }
+            }
+        }
+    }
+
+    private fun clearRelayConfiguration() {
+        worker.execute {
+            val result = runCatching {
+                RelaySettings(this).clear()
+                AppNotificationListenerService.requestRelaySyncReload()
+            }
+            runOnUiThread {
+                result.onSuccess {
+                    relayEditor.text.clear()
+                    toast("中继配置已删除；局域网同步不受影响")
+                    refresh()
+                }.onFailure { toast("删除失败：${it.localizedMessage ?: it.javaClass.simpleName}") }
+            }
+        }
     }
 
     private fun chooseExportTarget() {
@@ -313,6 +387,13 @@ class MainActivity : Activity() {
         LanSyncPhase.DISCOVERING -> "发现 Mac"
         LanSyncPhase.SENDING -> "正在发送"
         LanSyncPhase.WAITING_RETRY -> "等待重试"
+    }
+
+    private fun formatRelayPhase(phase: RelaySyncPhase): String = when (phase) {
+        RelaySyncPhase.STOPPED -> "未连接"
+        RelaySyncPhase.IDLE -> "待机"
+        RelaySyncPhase.SENDING -> "正在发送"
+        RelaySyncPhase.WAITING_RETRY -> "等待重试"
     }
 
     private fun formatTime(timestamp: Long): String =

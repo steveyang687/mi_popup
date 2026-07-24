@@ -6,6 +6,7 @@ import MiPopupLAN
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panelController: NotchPanelController?
     private var localDeliveryServer: LocalDeliveryServer?
+    private var relayDeliveryClient: RelayDeliveryClient?
     private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -30,12 +31,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         localDeliveryServer = server
         server.start()
+        startRelayClient(using: server)
         buildStatusMenu()
         panelController.show()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         localDeliveryServer?.stop()
+        relayDeliveryClient?.stop()
     }
 
     func applicationDidChangeScreenParameters(_ notification: Notification) {
@@ -45,10 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func buildStatusMenu() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
-            button.image = NSImage(
-                systemSymbolName: "shippingbox.fill",
-                accessibilityDescription: "MiPopup"
-            )
+            button.image = StatusBarIcon.make()
         }
 
         let menu = NSMenu()
@@ -60,6 +60,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.items.forEach { $0.target = self }
         item.menu = menu
         statusItem = item
+    }
+
+    private func startRelayClient(using server: LocalDeliveryServer) {
+        do {
+            guard let configuration = try RelayConfiguration.load() else {
+                #if DEBUG
+                print("MiPopup Relay: no config at \(RelayConfiguration.defaultFileURL.path)")
+                #endif
+                return
+            }
+            let client = RelayDeliveryClient(
+                configuration: configuration,
+                onStateChange: { state in
+                    #if DEBUG
+                    print("MiPopup Relay: \(state)")
+                    #endif
+                },
+                onDelivery: { update in
+                    _ = await server.ingest(update)
+                }
+            )
+            relayDeliveryClient = client
+            client.start()
+        } catch {
+            // Never print the configuration contents: it contains the bearer token and E2EE key.
+            print("MiPopup Relay configuration error: \(error.localizedDescription)")
+        }
     }
 
     @objc private func showIsland() {

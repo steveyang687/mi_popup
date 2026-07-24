@@ -13,23 +13,28 @@ import java.util.UUID
 import java.util.concurrent.Executors
 
 /**
- * NotificationForwarder-style listener/dedup pipeline with local-network-only
- * delivery status synchronization. Raw notification content stays on the phone.
+ * NotificationForwarder-style listener/dedup pipeline. Only normalized delivery
+ * updates enter LAN or end-to-end encrypted relay synchronization.
  */
 class AppNotificationListenerService : NotificationListenerService() {
     private val writer = Executors.newSingleThreadExecutor()
     private val recentContent = LinkedHashMap<String, String>(MAX_RECENT_EVENTS, 0.75f, true)
 
     private lateinit var outbox: LanOutboxStore
+    private lateinit var relayOutbox: LanOutboxStore
     private lateinit var identityStore: LanIdentityStore
     private lateinit var captureWakeLock: PowerManager.WakeLock
 
     @Volatile
     private var lanSync: LanSyncCoordinator? = null
 
+    @Volatile
+    private var relaySync: RelaySyncCoordinator? = null
+
     override fun onCreate() {
         super.onCreate()
         outbox = LanOutboxStore(File(filesDir, LanOutboxStore.DIRECTORY_NAME))
+        relayOutbox = LanOutboxStore(File(filesDir, RelayProtocol.OUTBOX_DIRECTORY_NAME))
         identityStore = LanIdentityStore(applicationContext)
         captureWakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:delivery-capture")
@@ -41,6 +46,7 @@ class AppNotificationListenerService : NotificationListenerService() {
         activeInstance = this
         lanSync?.close()
         lanSync = LanSyncCoordinator(applicationContext, outbox).also(LanSyncCoordinator::start)
+        restartRelaySync()
         scanActiveNotifications()
     }
 
@@ -48,6 +54,8 @@ class AppNotificationListenerService : NotificationListenerService() {
         if (activeInstance === this) activeInstance = null
         lanSync?.close()
         lanSync = null
+        relaySync?.close()
+        relaySync = null
         super.onListenerDisconnected()
     }
 
@@ -173,8 +181,10 @@ class AppNotificationListenerService : NotificationListenerService() {
         if (deliveryUpdate != null) acquireCaptureWakeLock()
 
         writer.execute {
-            val enqueued = deliveryUpdate?.let { update ->
-                runCatching {
+            var lanEnqueued = false
+            var relayEnqueued = false
+            deliveryUpdate?.let { update ->
+                val entry = runCatching {
                     val sequence = identityStore.nextSequence()
                     val envelope = LanProtocol.encodeDeliveryUpdate(
                         deviceId = identityStore.deviceId(),
@@ -182,26 +192,43 @@ class AppNotificationListenerService : NotificationListenerService() {
                         sentAt = System.currentTimeMillis(),
                         deliveryUpdateJson = update.toJson().toString()
                     )
-                    outbox.enqueue(
-                        LanOutboxEntry(
-                            eventId = update.eventId,
-                            sequence = sequence,
-                            envelopeJson = envelope
-                        )
+                    LanOutboxEntry(
+                        eventId = update.eventId,
+                        sequence = sequence,
+                        envelopeJson = envelope
                     )
                 }.onFailure { error ->
                     LanSyncMonitor.update(
                         phase = LanSyncPhase.IDLE,
                         pendingCount = runCatching { outbox.pendingCount() }.getOrDefault(0),
-                        message = "配送状态入队失败：${error.localizedMessage ?: error.javaClass.simpleName}"
+                        message = "配送状态封装失败：${error.localizedMessage ?: error.javaClass.simpleName}"
                     )
-                }.getOrDefault(false)
-            } ?: false
+                }.getOrNull()
+                if (entry != null) {
+                    lanEnqueued = runCatching { outbox.enqueue(entry) }
+                        .onFailure { error ->
+                            LanSyncMonitor.update(
+                                LanSyncPhase.IDLE,
+                                runCatching { outbox.pendingCount() }.getOrDefault(0),
+                                "局域网入队失败：${error.localizedMessage ?: error.javaClass.simpleName}"
+                            )
+                        }.getOrDefault(false)
+                    relayEnqueued = runCatching { relayOutbox.enqueue(entry) }
+                        .onFailure { error ->
+                            RelaySyncMonitor.update(
+                                RelaySyncPhase.IDLE,
+                                runCatching { relayOutbox.pendingCount() }.getOrDefault(0),
+                                "中继入队失败：${error.localizedMessage ?: error.javaClass.simpleName}"
+                            )
+                        }.getOrDefault(false)
+                }
+            }
 
             try {
                 CaptureLogStore(applicationContext).append(record)
             } finally {
-                if (enqueued) lanSync?.kick()
+                if (lanEnqueued) lanSync?.kick()
+                if (relayEnqueued) relaySync?.kick()
                 if (deliveryUpdate != null) releaseCaptureWakeLock()
             }
         }
@@ -222,6 +249,8 @@ class AppNotificationListenerService : NotificationListenerService() {
         if (activeInstance === this) activeInstance = null
         lanSync?.close()
         lanSync = null
+        relaySync?.close()
+        relaySync = null
         releaseCaptureWakeLock()
         writer.shutdown()
         super.onDestroy()
@@ -229,6 +258,25 @@ class AppNotificationListenerService : NotificationListenerService() {
 
     private fun acquireCaptureWakeLock() {
         runCatching { captureWakeLock.acquire(CAPTURE_WAKE_LOCK_TIMEOUT_MILLIS) }
+    }
+
+    private fun restartRelaySync() {
+        relaySync?.close()
+        relaySync = null
+        val configuration = RelaySettings(applicationContext).load()
+        if (configuration == null) {
+            RelaySyncMonitor.update(
+                RelaySyncPhase.STOPPED,
+                runCatching { relayOutbox.pendingCount() }.getOrDefault(0),
+                "公网中继尚未配置"
+            )
+            return
+        }
+        relaySync = RelaySyncCoordinator(
+            applicationContext,
+            relayOutbox,
+            configuration
+        ).also(RelaySyncCoordinator::start)
     }
 
     private fun releaseCaptureWakeLock() {
@@ -287,6 +335,13 @@ class AppNotificationListenerService : NotificationListenerService() {
         fun requestLanSync(): Boolean {
             val coordinator = activeInstance?.lanSync ?: return false
             coordinator.kick()
+            return true
+        }
+
+        fun requestRelaySyncReload(): Boolean {
+            val service = activeInstance ?: return false
+            service.restartRelaySync()
+            service.relaySync?.kick()
             return true
         }
 

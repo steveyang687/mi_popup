@@ -1,5 +1,7 @@
 # MiPopup 项目设计文档
 
+> 2026-07-23 状态更新：已新增可选的个人 VPS 加密中继。本文后续仍保留部分 LAN Beta 的阶段性设计与退出条件；涉及“无 VPS/无跨网”的旧描述由 `docs/TRANSPORT_ARCHITECTURE.md` 和 `protocol/RELAY_PROTOCOL.md` 的当前实现说明取代。
+
 > 暂定名称：MiPopup  
 > 文档状态：Implementation Draft v0.7
 > 更新日期：2026-07-18

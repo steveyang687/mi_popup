@@ -4,7 +4,7 @@ Notchvisor is a lightweight "Dynamic Island" status panel running in the MacBook
 
 The application reads the local subscription quotas for OpenAI Codex and Google Antigravity, combining them with Codex Radar's public model IQ summaries to recommend the optimal Codex configuration on the fly. 
 
-The Android companion application is currently in the notification sampling stage, capturing delivery notifications from Meituan and Taobao Flash Sale.
+The Android companion parses delivery notifications from Meituan and Taobao Flash Sale, then pushes minimal delivery updates to macOS over LAN and, optionally, an end-to-end encrypted personal VPS relay.
 
 ---
 
@@ -32,11 +32,17 @@ Notchvisor utilizes and interacts with OpenAI Codex and GPT-5.6 in the following
 - **"Balanced"**: Recommends the most cost-efficient configuration among those scoring at least 90% of the strongest model's IQ.
 - Data is refreshed every 30 minutes. A source link to Codex Radar is displayed at the footer.
 
+### Delivery Sync
+- **Event-driven**: Android pushes state changes directly; macOS does not poll the phone.
+- **Dual transport**: Bonjour/TCP is used on the same LAN while HTTPS/WSS Relay supports cellular and different networks.
+- **End-to-end encrypted Relay**: The VPS stores only AES-256-GCM ciphertext and never receives the content key.
+- **Shared deduplication**: Both transports use the same `eventId`, so racing deliveries update the island once.
+
 ---
 
 ## Installation Packages
 
-- **Android**: `dist/MiPopupCapture-0.1.1-debug.apk`
+- **Android**: `dist/MiPopup-Android-0.1.4-relay-sync-debug.apk`
 - **macOS Apple Silicon**: `dist/MiPopup-0.1.0-arm64.dmg` (drag into Applications) or `dist/MiPopup-0.1.0-arm64.pkg` (macOS Installer)
 
 *Note: These packages are signed with local development credentials (Android debug key / macOS ad-hoc signatures) and are not notarized by Apple.*
@@ -49,14 +55,18 @@ Notchvisor utilizes and interacts with OpenAI Codex and GPT-5.6 in the following
 
 1. Transfer the APK to your Android device and install it. If using ADB, run:
    ```bash
-   adb install -r dist/MiPopupCapture-0.1.1-debug.apk
+   adb install -r dist/MiPopup-Android-0.1.4-relay-sync-debug.apk
    ```
 2. Open the **"MiPopup 通知采集"** app, tap **"1. 打开通知使用权设置"**, and grant Notification Access to the app.
 3. Verify that notifications for Meituan (美团) and Taobao (淘宝) are enabled in your Android system settings.
 4. Once you receive delivery notifications, return to the app and tap **"刷新日志预览"** to see captured logs.
 5. Tap **"3. 导出脱敏 JSONL"** to export the redacted notification logs using the Storage Access Framework, then transfer the `.jsonl` file to your Mac.
 
-### 2. macOS Client Setup
+### 2. Optional Personal Relay
+
+Generate credentials on a trusted Mac, upload only the server environment file, and deploy `services/relay/compose.yaml` on the VPS by following `services/relay/README.md`. Paste the local client JSON into Android, and copy the same file to `~/Library/Application Support/MiPopup/relay-config.json` on macOS.
+
+### 3. macOS Client Setup
 
 1. Install the macOS client using `dist/MiPopup-0.1.0-arm64.pkg` or drag the app from `dist/MiPopup-0.1.0-arm64.dmg` to your `/Applications` folder.
 2. If blocked by macOS Gatekeeper on first launch, go to **System Settings → Privacy & Security** and select **"Open Anyway"**.
@@ -104,6 +114,8 @@ cd apps/macos
 - `PROJECT_DESIGN.md`: Architecture details, privacy rules, and parser design.
 - `apps/android`: Kotlin-based Android notification collector.
 - `apps/macos`: Swift-based AppKit/SwiftUI notch client.
+- `services/relay`: Ciphertext-only Node.js/SQLite Relay with Caddy and Docker Compose deployment.
+- `protocol/RELAY_PROTOCOL.md`: Cross-network E2EE wire contract.
 - `docs/CAPTURE_SCHEMA.md`: Notification log field contract.
 - `LICENSES/CodexBar-MIT.txt`: MIT License for the AI quota provider references.
 - `samples/mipopup-sample.jsonl`: Test logs for macOS importer validation.

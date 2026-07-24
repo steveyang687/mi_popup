@@ -1,0 +1,50 @@
+services:
+  relay:
+    build: .
+    init: true
+    restart: unless-stopped
+    environment:
+      MIPOPUP_RELAY_HOST: 0.0.0.0
+      MIPOPUP_RELAY_PORT: 8787
+      MIPOPUP_RELAY_CHANNEL_ID: ${MIPOPUP_RELAY_CHANNEL_ID}
+      MIPOPUP_RELAY_TOKEN: ${MIPOPUP_RELAY_TOKEN}
+      MIPOPUP_RELAY_DATABASE: /var/lib/mipopup-relay/relay.sqlite
+      MIPOPUP_RELAY_RETENTION_HOURS: ${MIPOPUP_RELAY_RETENTION_HOURS:-168}
+      MIPOPUP_RELAY_MAX_EVENTS: ${MIPOPUP_RELAY_MAX_EVENTS:-1000}
+    volumes:
+      - relay-data:/var/lib/mipopup-relay
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - internal
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      relay:
+        condition: service_healthy
+    environment:
+      MIPOPUP_RELAY_DOMAIN: ${MIPOPUP_RELAY_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - internal
+
+networks:
+  internal:
+
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:

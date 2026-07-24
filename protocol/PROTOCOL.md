@@ -1,5 +1,7 @@
 # MiPopup 同局域网同步协议 v1
 
+> 该 LAN 协议继续保留。可选跨网通道封装同一 envelope，见 `RELAY_PROTOCOL.md`。
+
 当前协议只用于同一可信局域网中的 Android 到 macOS 单向状态推送。Android 是连接发起方，Mac 是被动监听方；Mac 只返回 ACK，不轮询 Android，也不发送控制命令。
 
 ## TCP 分帧
@@ -51,4 +53,4 @@ ACK 的 `eventId` 必须与已接收 `payload.eventId` 相同。首次接受返�
 - 首版没有握手、配对、认证或传输加密，不能降级承载原始通知。
 - 该实现只面向本人设备和可信局域网 Beta。处于同一网络的其他设备可能读取状态或伪造消息。
 - 公开发布前必须加入显式设备配对、凭据安全存储、加密与完整性校验；在此之前不得宣称端到端加密或安全设备认证。
-- 跨网、VPS、中继、NAT 打洞、Tailscale、Headscale、WebRTC 和 TURN 均不属于协议 v1，也没有回退路径。
+- LAN v1 本身不做跨网或打洞；可选 Relay v1 通过 HTTPS/WSS 并行承载同一归一化 envelope，不改变本协议的字段和 ACK 幂等语义。

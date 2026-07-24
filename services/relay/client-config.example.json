@@ -1,0 +1,6 @@
+{
+  "baseURL": "https://relay.example.com",
+  "channelId": "replace_with_generated_channel_id",
+  "token": "replace_with_generated_bearer_token_at_least_32_chars",
+  "encryptionKey": "replace_with_32_byte_standard_base64_key"
+}

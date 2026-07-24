@@ -16,6 +16,7 @@ DMG_PATH="$DIST_DIR/MiPopup-0.1.0-arm64.dmg"
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 export CLANG_MODULE_CACHE_PATH="$PROJECT_DIR/.build-cache/clang"
 mkdir -p "$CLANG_MODULE_CACHE_PATH" "$DIST_DIR"
+"$SCRIPT_DIR/generate-icons.sh"
 
 cd "$PROJECT_DIR"
 swift build -c release --disable-sandbox
@@ -23,6 +24,8 @@ swift build -c release --disable-sandbox
 mkdir -p "$CONTENTS_DIR/MacOS" "$CONTENTS_DIR/Resources"
 cp ".build/release/MiPopup" "$CONTENTS_DIR/MacOS/MiPopup"
 cp "Packaging/Info.plist" "$CONTENTS_DIR/Info.plist"
+cp "Packaging/Resources/AppIcon.icns" "$CONTENTS_DIR/Resources/AppIcon.icns"
+cp "Packaging/Resources/MenuBarIcon.svg" "$CONTENTS_DIR/Resources/MenuBarIcon.svg"
 
 xattr -cr "$APP_DIR"
 codesign --force --deep --sign - "$APP_DIR"

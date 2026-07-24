@@ -20,6 +20,8 @@ final class NotchPanelController: NSWindowController {
     private var hoverCollapseTask: Task<Void, Never>?
     private var manualCollapseReleaseTask: Task<Void, Never>?
     private var fullscreenVisibilityTask: Task<Void, Never>?
+    private var fullscreenProbeTask: Task<Void, Never>?
+    private var fullscreenRestoreTask: Task<Void, Never>?
     nonisolated(unsafe) private var frameDisplayLink: CADisplayLink?
     private var frameAnimation: PanelFrameAnimation?
     private var islandContainerView: IslandHostingContainerView?
@@ -39,6 +41,7 @@ final class NotchPanelController: NSWindowController {
         configure(panel)
         installContent(in: panel)
         observeWorkspaceChanges()
+        startFullscreenVisibilityProbe()
         restoreCachedQuotaSnapshots()
         startQuotaRefreshLoop()
     }
@@ -50,16 +53,19 @@ final class NotchPanelController: NSWindowController {
         hoverCollapseTask?.cancel()
         manualCollapseReleaseTask?.cancel()
         fullscreenVisibilityTask?.cancel()
+        fullscreenProbeTask?.cancel()
+        fullscreenRestoreTask?.cancel()
         frameDisplayLink?.invalidate()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
     func show() {
-        guard let screen = preferredScreen(), !frontmostApplicationIsFullscreen(on: screen) else {
-            isHiddenForFullscreen = true
-            window?.orderOut(nil)
+        if frontmostApplicationIsFullscreen() {
+            hideForFullscreen()
             return
         }
+        fullscreenRestoreTask?.cancel()
+        fullscreenRestoreTask = nil
         isHiddenForFullscreen = false
         reposition()
         window?.orderFrontRegardless()
@@ -135,21 +141,54 @@ final class NotchPanelController: NSWindowController {
     }
 
     private func updateFullscreenVisibility() {
-        guard let screen = preferredScreen() else { return }
-        if frontmostApplicationIsFullscreen(on: screen) {
-            isHiddenForFullscreen = true
-            window?.orderOut(nil)
+        if frontmostApplicationIsFullscreen() {
+            hideForFullscreen()
             return
         }
-        guard isHiddenForFullscreen else { return }
-        isHiddenForFullscreen = false
-        reposition()
-        window?.orderFrontRegardless()
+        scheduleFullscreenRestore()
     }
 
-    private func frontmostApplicationIsFullscreen(on screen: NSScreen) -> Bool {
+    private func startFullscreenVisibilityProbe() {
+        fullscreenProbeTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                } catch {
+                    return
+                }
+                guard let self else { return }
+                self.updateFullscreenVisibility()
+            }
+        }
+    }
+
+    private func hideForFullscreen() {
+        fullscreenRestoreTask?.cancel()
+        fullscreenRestoreTask = nil
+        guard !isHiddenForFullscreen else { return }
+        isHiddenForFullscreen = true
+        window?.orderOut(nil)
+    }
+
+    private func scheduleFullscreenRestore() {
+        guard isHiddenForFullscreen, fullscreenRestoreTask == nil else { return }
+        fullscreenRestoreTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+            } catch {
+                return
+            }
+            guard let self else { return }
+            self.fullscreenRestoreTask = nil
+            guard !self.frontmostApplicationIsFullscreen() else { return }
+            self.isHiddenForFullscreen = false
+            self.reposition()
+            self.window?.orderFrontRegardless()
+        }
+    }
+
+    private func frontmostApplicationIsFullscreen() -> Bool {
         guard let processIdentifier = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-              let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
               let windowList = CGWindowListCopyWindowInfo(
                 [.optionOnScreenOnly, .excludeDesktopElements],
                 kCGNullWindowID
@@ -157,19 +196,27 @@ final class NotchPanelController: NSWindowController {
             return false
         }
 
-        let displayBounds = CGDisplayBounds(CGDirectDisplayID(screenNumber.uint32Value))
-        let tolerance: CGFloat = 2
-        return windowList.contains { windowInfo in
+        let windows = windowList.compactMap { windowInfo -> CGRect? in
             guard (windowInfo[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == processIdentifier,
                   (windowInfo[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
-                  let boundsDictionary = windowInfo[kCGWindowBounds as String] as? NSDictionary,
-                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary) else {
+                  let boundsDictionary = windowInfo[kCGWindowBounds as String] as? NSDictionary
+            else {
+                return nil
+            }
+            return CGRect(dictionaryRepresentation: boundsDictionary)
+        }
+
+        return NSScreen.screens.contains { screen in
+            guard let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
                 return false
             }
-            return abs(bounds.minX - displayBounds.minX) <= tolerance
-                && abs(bounds.minY - displayBounds.minY) <= tolerance
-                && abs(bounds.width - displayBounds.width) <= tolerance
-                && abs(bounds.height - displayBounds.height) <= tolerance
+            let displayBounds = CGDisplayBounds(CGDirectDisplayID(screenNumber.uint32Value))
+            return windows.contains {
+                FullScreenWindowGeometry.coversDisplay(
+                    windowBounds: $0,
+                    displayBounds: displayBounds
+                )
+            }
         }
     }
 
@@ -190,8 +237,9 @@ final class NotchPanelController: NSWindowController {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 1)
-        // Omitting fullScreenAuxiliary keeps the island out of native full-screen Spaces.
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        // Visibility in another app's full-screen Space is controlled explicitly above.
+        // fullScreenNone prevents this panel from presenting as a full-screen window itself.
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenNone, .stationary]
         panel.hidesOnDeactivate = false
         panel.isMovable = false
         panel.isMovableByWindowBackground = false

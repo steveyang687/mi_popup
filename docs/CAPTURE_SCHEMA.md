@@ -69,15 +69,16 @@ Android 的通知更新仍会回调 `onNotificationPosted`；采集器使用加�
 
 `unknown` 表示已经确认存在外卖订单，但通知没有提供足够信息判断接单、备餐、取货或配送阶段。淘宝闪购目前只有营销负样本，尚未宣称支持具体配送状态。
 
-## 与同局域网同步的关系
+## 与网络同步的关系
 
-采集 JSONL 和局域网协议是两条不同的数据路径：
+采集 JSONL 和配送状态同步是两条不同的数据路径：
 
 - 采集 JSONL 可以包含原始通知标准字段，只保存在 Android 应用私有目录，并且只能由用户主动导出。
-- 局域网同步只取事件中的 `delivery` 对象，不发送其余采集字段，也不发送整个 JSONL 行。
+- LAN 和 Relay 都只取事件中的 `delivery` 对象，不发送其余采集字段，也不发送整个 JSONL 行。
 - Android 用 `protocol/schemas/sync-envelope-v1.schema.json` 包装一个 `DeliveryUpdate`。
 - Mac 接收并校验成功后按 `protocol/schemas/sync-ack-v1.schema.json` 返回 ACK。
 - TCP 分帧、重试和当前明文可信局域网 Beta 边界见 `protocol/PROTOCOL.md`。
+- 跨网 Relay 将同一 envelope 进行 AES-256-GCM 认证加密，VPS 只保存密文；见 `protocol/RELAY_PROTOCOL.md`。
 
 没有 `delivery` 的事件不会发送到网络。`removed`、完全重复回调、分组摘要、营销通知和未命中解析器的通知仍可用于本地采样，但不会触发 Mac 更新。
 

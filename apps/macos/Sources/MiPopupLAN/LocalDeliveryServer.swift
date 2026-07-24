@@ -69,6 +69,20 @@ public final class LocalDeliveryServer: @unchecked Sendable {
         store.dismiss(eventId: eventId)
     }
 
+    public func ingest(_ update: DeliveryUpdate) async -> DeliveryAcknowledgementStatus {
+        await withCheckedContinuation { continuation in
+            queue.async { [weak self] in
+                guard let self else {
+                    continuation.resume(returning: .duplicate)
+                    return
+                }
+                self.accept(update) { status in
+                    continuation.resume(returning: status)
+                }
+            }
+        }
+    }
+
     private func startOnQueue() {
         guard listener == nil else { return }
 
@@ -197,37 +211,41 @@ public final class LocalDeliveryServer: @unchecked Sendable {
 
     private func handle(frame: Data, from clientId: UUID) throws {
         let envelope = try DeliveryWireCodec.decodeEnvelope(frame)
-        let update = envelope.payload
-
-        if store.contains(eventId: update.eventId) {
-            sendAcknowledgement(
-                eventId: update.eventId,
-                status: .duplicate,
+        accept(envelope.payload) { [weak self] status in
+            self?.sendAcknowledgement(
+                eventId: envelope.payload.eventId,
+                status: status,
                 to: clientId
             )
-            return
-        }
-        guard pendingEventIds.insert(update.eventId).inserted else {
-            return
-        }
-
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            self.onDelivery(update)
-            self.finishAccepting(update, clientId: clientId)
         }
     }
 
-    private func finishAccepting(_ update: DeliveryUpdate, clientId: UUID) {
-        queue.async { [weak self] in
-            guard let self else { return }
-            self.pendingEventIds.remove(update.eventId)
-            let inserted = self.store.record(update)
-            self.sendAcknowledgement(
-                eventId: update.eventId,
-                status: inserted ? .accepted : .duplicate,
-                to: clientId
-            )
+    private func accept(
+        _ update: DeliveryUpdate,
+        completion: @escaping @Sendable (DeliveryAcknowledgementStatus) -> Void
+    ) {
+        if store.contains(eventId: update.eventId) {
+            completion(.duplicate)
+            return
+        }
+        guard pendingEventIds.insert(update.eventId).inserted else {
+            completion(.duplicate)
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else {
+                completion(.duplicate)
+                return
+            }
+            self.onDelivery(update)
+            self.queue.async { [weak self] in
+                guard let self else {
+                    completion(.duplicate)
+                    return
+                }
+                self.pendingEventIds.remove(update.eventId)
+                completion(self.store.record(update) ? .accepted : .duplicate)
+            }
         }
     }
 
