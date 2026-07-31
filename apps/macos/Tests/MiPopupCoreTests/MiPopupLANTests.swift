@@ -119,6 +119,67 @@ struct MiPopupLANTests {
         #expect(try RelayConfiguration.load(from: file) != nil)
     }
 
+    @Test
+    func savesRelayConfigurationWithPrivatePermissions() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MiPopupRelaySave-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("relay-config.json")
+        let key = Data(repeating: 1, count: 32).base64EncodedString()
+        let json = """
+        {
+          "baseURL": "https://relay.example.com",
+          "channelId": "personal_channel_01",
+          "token": "token-that-is-longer-than-thirty-two-characters",
+          "encryptionKey": "\(key)"
+        }
+        """
+
+        try RelayConfiguration.save(json: json, to: file)
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+        let permissions = try #require((attributes[.posixPermissions] as? NSNumber)?.intValue)
+        #expect(permissions & 0o777 == 0o600)
+        #expect(try RelayConfiguration.load(from: file) != nil)
+        #expect(try RelayConfiguration.readJSON(from: file) == json)
+
+        #expect(throws: RelayConfigurationError.insecureBaseURL) {
+            try RelayConfiguration.save(
+                json: json.replacingOccurrences(
+                    of: "https://relay.example.com",
+                    with: "http://relay.example.com"
+                ),
+                to: file
+            )
+        }
+        #expect(try RelayConfiguration.load(from: file) != nil)
+    }
+
+    @Test
+    func relayPingIgnoresDuplicateCompletion() async throws {
+        try await RelayDeliveryClient.awaitPing { completion in
+            completion(nil)
+            completion(URLError(.networkConnectionLost))
+        }
+    }
+
+    @Test
+    func relayPingCancellationDoesNotWaitForCallback() async {
+        let task = Task {
+            try await RelayDeliveryClient.awaitPing { _ in }
+        }
+        task.cancel()
+
+        do {
+            try await task.value
+            Issue.record("Expected relay ping cancellation to throw")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            Issue.record("Expected CancellationError, got \(error)")
+        }
+    }
+
     @Test @MainActor
     func externalRelayIngestUsesTheSharedRecentDeliveryStore() async throws {
         let suiteName = "MiPopupRelayIngestTests.\(UUID().uuidString)"
@@ -290,6 +351,79 @@ struct MiPopupLANTests {
         #expect(update.statusDetail == "骑手正在为您送货")
         #expect(update.progressPercent == 45)
         #expect(update.sourceFormat == .hyperOSFocus)
+    }
+
+    @Test
+    func validatesCustomDeliverySourceWithoutNotificationText() throws {
+        let update = DeliveryUpdate(
+            parserVersion: 4,
+            eventId: UUID().uuidString,
+            sourceEventKind: "posted",
+            capturedAt: 2,
+            provider: .custom,
+            providerName: "京东秒送",
+            stage: .delivering,
+            statusText: DeliveryStage.delivering.displayName,
+            etaText: "18:35",
+            sourceFormat: .standardNotification,
+            confidence: 0.9,
+            orderKey: "order-key",
+            sourcePackage: "com.example.delivery"
+        )
+
+        try DeliveryWireValidator.validate(update)
+        #expect(update.providerDisplayName == "京东秒送")
+
+        let missingName = DeliveryUpdate(
+            parserVersion: 4,
+            eventId: UUID().uuidString,
+            sourceEventKind: "posted",
+            capturedAt: 2,
+            provider: .custom,
+            stage: .delivering,
+            statusText: DeliveryStage.delivering.displayName,
+            etaText: nil,
+            confidence: 0.9,
+            orderKey: "order-key",
+            sourcePackage: "com.example.delivery"
+        )
+        #expect(throws: DeliveryWireValidationError.invalidProviderName) {
+            try DeliveryWireValidator.validate(missingName)
+        }
+    }
+
+    @Test
+    func decodesAndroidCustomDeliveryEnvelope() throws {
+        let json = """
+        {
+          "protocolVersion": 1,
+          "type": "delivery_update",
+          "deviceId": "a0b1c2d3-e4f5-4678-9123-abcdefabcdef",
+          "sequence": 9,
+          "sentAt": 1784390000000,
+          "payload": {
+            "schemaVersion": 1,
+            "parserVersion": 4,
+            "eventId": "01234567-89ab-4cde-8fab-0123456789ab",
+            "sourceEventKind": "updated",
+            "capturedAt": 1784390000000,
+            "provider": "custom",
+            "providerName": "京东秒送",
+            "state": "delivering",
+            "statusText": "配送中",
+            "etaText": "18:35",
+            "sourceFormat": "standard_notification",
+            "confidence": 0.9,
+            "orderKey": "notification-hash",
+            "sourcePackage": "com.example.delivery"
+          }
+        }
+        """
+
+        let update = try DeliveryWireCodec.decodeEnvelope(Data(json.utf8)).payload
+        #expect(update.provider == .custom)
+        #expect(update.providerDisplayName == "京东秒送")
+        #expect(update.sourcePackage == "com.example.delivery")
     }
 
     @Test

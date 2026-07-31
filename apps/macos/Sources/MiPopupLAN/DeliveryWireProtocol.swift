@@ -73,6 +73,7 @@ public enum DeliveryWireValidationError: LocalizedError, Equatable {
     case invalidConfidence
     case invalidOrderKey
     case invalidSourcePackage
+    case invalidProviderName
 
     public var errorDescription: String? {
         switch self {
@@ -114,6 +115,8 @@ public enum DeliveryWireValidationError: LocalizedError, Equatable {
             "订单去重标识无效。"
         case .invalidSourcePackage:
             "配送来源应用无效。"
+        case .invalidProviderName:
+            "自定义配送来源名称无效。"
         }
     }
 }
@@ -144,6 +147,7 @@ public enum DeliveryWireCodec {
                 "sourceEventKind",
                 "capturedAt",
                 "provider",
+                "providerName",
                 "state",
                 "statusText",
                 "etaText",
@@ -233,8 +237,20 @@ public enum DeliveryWireValidator {
         guard isBoundedNonempty(update.orderKey, maximumLength: 256) else {
             throw DeliveryWireValidationError.invalidOrderKey
         }
-        guard packages(for: update.provider).contains(update.sourcePackage) else {
-            throw DeliveryWireValidationError.invalidSourcePackage
+        switch update.provider {
+        case .custom:
+            guard let providerName = update.providerName,
+                  isBoundedNonempty(providerName, maximumLength: 48) else {
+                throw DeliveryWireValidationError.invalidProviderName
+            }
+            guard isValidPackageIdentifier(update.sourcePackage) else {
+                throw DeliveryWireValidationError.invalidSourcePackage
+            }
+        case .meituan, .taobaoInstant:
+            guard update.providerName == nil,
+                  packages(for: update.provider).contains(update.sourcePackage) else {
+                throw DeliveryWireValidationError.invalidSourcePackage
+            }
         }
     }
 
@@ -251,6 +267,18 @@ public enum DeliveryWireValidator {
             ["com.sankuai.meituan", "com.sankuai.meituan.takeoutnew"]
         case .taobaoInstant:
             ["com.taobao.taobao", "me.ele"]
+        case .custom:
+            []
+        }
+    }
+
+    private static func isValidPackageIdentifier(_ value: String) -> Bool {
+        guard isBoundedNonempty(value, maximumLength: 200) else { return false }
+        let segments = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard segments.count >= 2 else { return false }
+        return segments.allSatisfy { segment in
+            guard let first = segment.first, first.isLetter || first == "_" else { return false }
+            return segment.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
         }
     }
 }

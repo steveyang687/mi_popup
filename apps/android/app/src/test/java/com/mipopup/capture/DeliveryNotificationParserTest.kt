@@ -36,6 +36,35 @@ class DeliveryNotificationParserTest {
     }
 
     @Test
+    fun parsesTaobaoInstantDeliveryTimeRangeWithKnightWording() {
+        val update = DeliveryNotificationParser.parse(
+            input(
+                sourcePackage = "com.taobao.taobao",
+                title = "预计11:25-11:45送达",
+                text = "骑士正在配送"
+            )
+        )
+
+        assertEquals(DeliveryProvider.TAOBAO_INSTANT, update?.provider)
+        assertEquals(DeliveryStage.DELIVERING, update?.stage)
+        assertEquals("11:25-11:45", update?.etaText)
+    }
+
+    @Test
+    fun parsesTaobaoInstantLockerDeliveryAsDelivered() {
+        val update = DeliveryNotificationParser.parse(
+            input(
+                sourcePackage = "com.taobao.taobao",
+                title = "订单已存入智能柜",
+                text = "您的佬街佬味·手撕鸡订单已存入智能柜，请尽快取货"
+            )
+        )
+
+        assertEquals(DeliveryProvider.TAOBAO_INSTANT, update?.provider)
+        assertEquals(DeliveryStage.DELIVERED, update?.stage)
+    }
+
+    @Test
     fun parsesHyperOSFocusStatusEtaAndProgress() {
         val focusParam = """
             {
@@ -152,6 +181,104 @@ class DeliveryNotificationParserTest {
                 input(title = "订单已取消", text = "点击查看详情")
             )
         )
+    }
+
+    @Test
+    fun parsesUserConfiguredStandardNotificationAndKeepsItsSyncChoice() {
+        val rule = CustomDeliveryRule(
+            displayName = "京东秒送",
+            sourcePackage = "com.example.delivery",
+            sourceFormat = CustomDeliverySourceFormat.STANDARD_NOTIFICATION,
+            stage = DeliveryStage.DELIVERING,
+            matchAnyTerms = listOf("配送员正在赶来", "配送中"),
+            contextAnyTerms = listOf("秒送", "配送员"),
+            syncToMac = false
+        )
+
+        val parsed = DeliveryNotificationParser.parseConfigured(
+            input(
+                sourcePackage = "com.example.delivery",
+                title = "京东秒送",
+                text = "配送员正在赶来，预计 18:35 送达"
+            ),
+            listOf(rule)
+        )
+
+        assertEquals(DeliveryProvider.CUSTOM, parsed?.update?.provider)
+        assertEquals("京东秒送", parsed?.update?.providerName)
+        assertEquals(DeliveryStage.DELIVERING, parsed?.update?.stage)
+        assertEquals("18:35", parsed?.update?.etaText)
+        assertEquals(DeliverySourceFormat.STANDARD_NOTIFICATION, parsed?.update?.sourceFormat)
+        assertEquals(false, parsed?.syncToMac)
+    }
+
+    @Test
+    fun parsesUserConfiguredHyperOSFocusNotification() {
+        val rule = CustomDeliveryRule(
+            displayName = "自定义外卖",
+            sourcePackage = "com.example.delivery",
+            sourceFormat = CustomDeliverySourceFormat.HYPEROS_FOCUS,
+            stage = DeliveryStage.ARRIVING,
+            matchAnyTerms = listOf("马上到"),
+            contextAnyTerms = emptyList(),
+            syncToMac = true
+        )
+
+        val parsed = DeliveryNotificationParser.parseConfigured(
+            input(
+                sourcePackage = "com.example.delivery",
+                focusParam = """{"param_v2":{"ticker":"骑手马上到，预计12分钟送达"}}"""
+            ),
+            listOf(rule)
+        )
+
+        assertEquals(DeliveryStage.ARRIVING, parsed?.update?.stage)
+        assertEquals("12分钟", parsed?.update?.etaText)
+        assertEquals(DeliverySourceFormat.HYPEROS_FOCUS, parsed?.update?.sourceFormat)
+        assertEquals(true, parsed?.syncToMac)
+    }
+
+    @Test
+    fun customRuleCodecRoundTripsAndRejectsAnInvalidPackage() {
+        val rule = CustomDeliveryRule(
+            displayName = "测试来源",
+            sourcePackage = "com.example.delivery",
+            sourceFormat = CustomDeliverySourceFormat.AUTO,
+            stage = DeliveryStage.DELIVERED,
+            matchAnyTerms = listOf("已送达"),
+            contextAnyTerms = emptyList(),
+            syncToMac = true
+        )
+
+        assertEquals(listOf(rule), CustomDeliveryRuleCodec.decode(CustomDeliveryRuleCodec.encode(listOf(rule))))
+        try {
+            CustomDeliveryRuleCodec.decode(
+                """[{"name":"测试","package":"not a package","format":"auto","stage":"delivered","matchAny":["已送达"]}]"""
+            )
+            throw AssertionError("expected invalid package to fail")
+        } catch (_: IllegalArgumentException) {
+            // Expected: malformed packages must not become notification sources.
+        }
+    }
+
+    @Test
+    fun createsProtocolCompatibleNetworkSyncTestMessage() {
+        val update = DeliveryUpdate.networkSyncTest(
+            eventId = "11111111-1111-4111-8111-111111111111",
+            capturedAt = 42,
+            orderKey = "network-test-order-key",
+            sourcePackage = "com.mipopup.capture"
+        )
+        val json = update.toJson()
+
+        assertEquals("posted", update.sourceEventKind)
+        assertEquals(DeliveryProvider.CUSTOM, update.provider)
+        assertEquals("MiPopup 测试", update.providerName)
+        assertEquals(DeliveryStage.DELIVERING, update.stage)
+        assertEquals("15 分钟", update.etaText)
+        assertEquals(50, update.progressPercent)
+        assertEquals("custom", json.getString("provider"))
+        assertEquals("standard_notification", json.getString("sourceFormat"))
     }
 
     private fun input(

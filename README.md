@@ -42,7 +42,7 @@ Notchvisor utilizes and interacts with OpenAI Codex and GPT-5.6 in the following
 
 ## Installation Packages
 
-- **Android**: `dist/MiPopup-Android-0.1.4-relay-sync-debug.apk`
+- **Android**: `dist/MiPopup-Android-0.1.5-network-test-debug.apk`
 - **macOS Apple Silicon**: `dist/MiPopup-0.1.0-arm64.dmg` (drag into Applications) or `dist/MiPopup-0.1.0-arm64.pkg` (macOS Installer)
 
 *Note: These packages are signed with local development credentials (Android debug key / macOS ad-hoc signatures) and are not notarized by Apple.*
@@ -55,16 +55,18 @@ Notchvisor utilizes and interacts with OpenAI Codex and GPT-5.6 in the following
 
 1. Transfer the APK to your Android device and install it. If using ADB, run:
    ```bash
-   adb install -r dist/MiPopup-Android-0.1.4-relay-sync-debug.apk
+   adb install -r dist/MiPopup-Android-0.1.5-network-test-debug.apk
    ```
 2. Open the **"MiPopup 通知采集"** app, tap **"1. 打开通知使用权设置"**, and grant Notification Access to the app.
 3. Verify that notifications for Meituan (美团) and Taobao (淘宝) are enabled in your Android system settings.
 4. Once you receive delivery notifications, return to the app and tap **"刷新日志预览"** to see captured logs.
 5. Tap **"3. 导出脱敏 JSONL"** to export the redacted notification logs using the Storage Access Framework, then transfer the `.jsonl` file to your Mac.
+6. For another delivery app or a new notification phrasing, tap **"2. 扫描当前活动通知"** and copy its package name from the status card. Add a rule under **"自定义配送解析规则"**: select `auto`, `standard_notification`, or `hyperos_focus`, map matching wording to a delivery stage, and set `syncToMac` to control whether that rule updates the Mac island. The rule JSON example is built into the app.
+7. To verify the complete data path without waiting for a real order, tap **"4. 发送测试配送状态到 Mac"**. The test event is written to the local log and sent through the same LAN and personal-relay outboxes as a real delivery update.
 
 ### 2. Optional Personal Relay
 
-Generate credentials on a trusted Mac, upload only the server environment file, and deploy `services/relay/compose.yaml` on the VPS by following `services/relay/README.md`. Paste the local client JSON into Android, and copy the same file to `~/Library/Application Support/MiPopup/relay-config.json` on macOS.
+Generate credentials on a trusted Mac, upload only the server environment file, and deploy `services/relay/compose.yaml` on the VPS by following `services/relay/README.md`. Paste the local client JSON into Android. On macOS, open the island's **中继** tab (or choose **配置公网中继…** from the menu bar), paste the same JSON, and select **保存并连接**.
 
 ### 3. macOS Client Setup
 

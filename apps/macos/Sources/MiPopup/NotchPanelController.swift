@@ -7,6 +7,7 @@ import SwiftUI
 final class NotchPanelController: NSWindowController {
     var onImportRequest: (() -> Void)?
     var onDismissDelivery: ((String) -> Void)?
+    var onSaveRelayConfiguration: ((String) throws -> Void)?
 
     private let model = IslandViewModel()
     private let quotaProviders: [any SubscriptionQuotaProviding] = [
@@ -105,6 +106,27 @@ final class NotchPanelController: NSWindowController {
         guard !restoreOnly else { return }
         resize(animated: true)
         show()
+    }
+
+    func showRelayConfiguration() {
+        model.selectedTab = .relay
+        model.expanded = true
+        resize(animated: true)
+        show()
+    }
+
+    func updateRelayConfiguration(
+        configured: Bool,
+        detail: String,
+        error: String? = nil,
+        json: String? = nil
+    ) {
+        model.updateRelayConfiguration(
+            configured: configured,
+            detail: detail,
+            error: error,
+            json: json
+        )
     }
 
     private func observeWorkspaceChanges() {
@@ -224,10 +246,13 @@ final class NotchPanelController: NSWindowController {
         guard !model.isRefreshingSelectedTab else { return }
         immediateRefreshTask = Task { [weak self] in
             guard let self else { return }
-            if self.model.selectedTab == .quota {
+            switch self.model.selectedTab {
+            case .quota:
                 await self.loadQuotas()
-            } else {
+            case .models:
                 await self.loadModelIntelligence()
+            case .relay:
+                return
             }
         }
     }
@@ -255,6 +280,7 @@ final class NotchPanelController: NSWindowController {
             onTabChange: { [weak self] _ in self?.resize(animated: true) },
             onRefresh: { [weak self] in self?.refreshQuotas() },
             onImport: { [weak self] in self?.onImportRequest?() },
+            onSaveRelayConfiguration: { [weak self] json in self?.saveRelayConfiguration(json) },
             onDismissDelivery: { [weak self] in self?.dismissCurrentDelivery() },
             onQuit: { NSApp.terminate(nil) },
             onDropFile: { [weak self] url in self?.importLog(at: url) }
@@ -288,6 +314,16 @@ final class NotchPanelController: NSWindowController {
         resize(animated: true)
     }
 
+    private func saveRelayConfiguration(_ json: String) {
+        do {
+            guard let onSaveRelayConfiguration else { return }
+            try onSaveRelayConfiguration(json)
+            model.relayConfigurationSaved()
+        } catch {
+            model.relayConfigurationSaveFailed(error)
+        }
+    }
+
     private func handleHover(_ isInside: Bool) {
         isPointerInside = isInside
         hoverCollapseTask?.cancel()
@@ -313,7 +349,7 @@ final class NotchPanelController: NSWindowController {
         hoverCollapseTask?.cancel()
         hoverCollapseTask = Task { [weak self] in
             do {
-                try await Task.sleep(for: .seconds(3))
+                try await Task.sleep(for: .milliseconds(1_500))
             } catch {
                 return
             }
@@ -628,6 +664,8 @@ final class NotchPanelController: NSWindowController {
                 + (model.eventCount == 0 ? 0 : 18)
         case .models:
             height = 334
+        case .relay:
+            height = 352
         }
         return NSSize(width: 470, height: height)
     }

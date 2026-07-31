@@ -31,6 +31,7 @@ class MainActivity : Activity() {
     private lateinit var statusText: TextView
     private lateinit var previewText: TextView
     private lateinit var packageEditor: EditText
+    private lateinit var customRuleEditor: EditText
     private lateinit var relayEditor: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -93,7 +94,11 @@ class MainActivity : Activity() {
             }
         }.withMargin(top = 8))
 
-        content.addView(button("4. 允许锁屏后台同步") {
+        content.addView(button("4. 发送测试配送状态到 Mac") {
+            sendNetworkSyncTest()
+        }.withMargin(top = 8))
+
+        content.addView(button("5. 允许锁屏后台同步") {
             requestLockScreenSyncPermission()
         }.withMargin(top = 8))
 
@@ -111,7 +116,13 @@ class MainActivity : Activity() {
             Color.GRAY
         ).withMargin(top = 8))
 
-        content.addView(label("目标应用包名（每行一个）", 15f, true, Color.WHITE).withMargin(top = 24))
+        content.addView(label("监听来源应用包名（每行一个）", 15f, true, Color.WHITE).withMargin(top = 24))
+        content.addView(label(
+            "内置的美团、淘宝闪购和饿了么规则会使用这些来源。自定义规则中的包名会自动加入监听范围，无需在这里重复填写。",
+            12f,
+            false,
+            Color.GRAY
+        ).withMargin(top = 6))
         packageEditor = EditText(this).apply {
             setText(CaptureSettings(this@MainActivity).targetPackages.sorted().joinToString("\n"))
             setTextColor(Color.WHITE)
@@ -132,15 +143,45 @@ class MainActivity : Activity() {
             }
         }.withMargin(top = 8))
 
+        content.addView(label("自定义配送解析规则", 15f, true, Color.WHITE).withMargin(top = 24))
+        content.addView(label(
+            "可为任意通知应用设置包名、标准通知或 HyperOS 焦点格式、状态关键词和是否同步到 Mac。规则按顺序匹配，先命中的规则优先；只会同步状态、预计时间和不可逆关联值，不发送通知原文。",
+            12f,
+            false,
+            Color.GRAY
+        ).withMargin(top = 6))
+        customRuleEditor = EditText(this).apply {
+            setText(CustomDeliveryRuleCodec.encode(CaptureSettings(this@MainActivity).customDeliveryRules))
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            setBackgroundColor(Color.rgb(37, 39, 45))
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            minLines = 10
+            gravity = Gravity.TOP
+            inputType = InputType.TYPE_CLASS_TEXT or
+                InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        }
+        content.addView(customRuleEditor.withMargin(top = 8))
+        content.addView(button("填入自定义规则示例") {
+            customRuleEditor.setText(CustomDeliveryRuleCodec.example())
+        }.withMargin(top = 8))
+        content.addView(button("保存自定义解析规则") { saveCustomDeliveryRules() }.withMargin(top = 8))
+
         content.addView(label("个人 VPS 中继（可选）", 15f, true, Color.WHITE).withMargin(top = 24))
         content.addView(label(
-            "粘贴部署脚本生成的完整客户端 JSON。凭据会由 Android Keystore 加密保存；界面不会回显 token 或内容密钥。",
+            "粘贴部署脚本生成的完整客户端 JSON。凭据由 Android Keystore 加密保存，并在此编辑框中回显，便于查看和修改当前配置。",
             12f,
             false,
             Color.GRAY
         ).withMargin(top = 6))
         relayEditor = EditText(this).apply {
             hint = "{\n  \"baseURL\": \"https://relay.example.com\",\n  \"channelId\": \"...\",\n  \"token\": \"...\",\n  \"encryptionKey\": \"...\"\n}"
+            setText(
+                RelaySettings(this@MainActivity).load()
+                    ?.let(RelayProtocol::encodeConfiguration)
+                    .orEmpty()
+            )
             setTextColor(Color.WHITE)
             setHintTextColor(Color.DKGRAY)
             setBackgroundColor(Color.rgb(37, 39, 45))
@@ -155,7 +196,7 @@ class MainActivity : Activity() {
         content.addView(button("保存中继配置并立即同步") { saveRelayConfiguration() }.withMargin(top = 8))
         content.addView(button("删除中继配置") { clearRelayConfiguration() }.withMargin(top = 8))
 
-        content.addView(button("5. 导出脱敏 JSONL") { chooseExportTarget() }.withMargin(top = 20))
+        content.addView(button("6. 导出脱敏 JSONL") { chooseExportTarget() }.withMargin(top = 20))
         content.addView(button("刷新日志预览") { refresh() }.withMargin(top = 8))
         content.addView(button("清空本地日志") {
             worker.execute {
@@ -193,6 +234,7 @@ class MainActivity : Activity() {
             ).pendingCount()
             val lanSync = LanSyncMonitor.snapshot()
             val relayConfigured = RelaySettings(this).load() != null
+            val customRules = CaptureSettings(this).customDeliveryRules
             val relayPending = LanOutboxStore(
                 File(filesDir, RelayProtocol.OUTBOX_DIRECTORY_NAME)
             ).pendingCount()
@@ -215,12 +257,16 @@ class MainActivity : Activity() {
                     relaySync.lastAcknowledgedAt?.let {
                         append("\n中继最近确认：${formatTime(it)}")
                     }
+                    if (customRules.isNotEmpty()) {
+                        append("\n自定义规则：${customRules.size} 条 · ${customRules.count { it.syncToMac }} 条同步到 Mac")
+                    }
                     if (activeScan != null) {
                         append("\n活动扫描：系统 ${activeScan.totalCount} 条 · 目标 ${activeScan.targetCount} 条")
                         if (activeScan.errorMessage != null) {
                             append("\n扫描错误：${activeScan.errorMessage}")
                         } else if (activeScan.targetCount == 0 && activeScan.relevantPackages.isNotEmpty()) {
-                            append("\n相关包：${activeScan.relevantPackages.joinToString("、")}")
+                            append("\n当前通知来源：${activeScan.relevantPackages.take(12).joinToString("、")}")
+                            if (activeScan.relevantPackages.size > 12) append(" 等 ${activeScan.relevantPackages.size} 个")
                         }
                     }
                 }
@@ -244,7 +290,7 @@ class MainActivity : Activity() {
 
         val message = when {
             result.errorMessage != null -> "扫描失败：${result.errorMessage}"
-            result.targetCount == 0 -> "系统返回 ${result.totalCount} 条活动通知，但没有匹配目标包"
+            result.targetCount == 0 -> "系统返回 ${result.totalCount} 条活动通知；可从状态卡复制来源包名"
             result.capturedCount == 0 -> "找到 ${result.targetCount} 条目标通知，内容与已有记录相同"
             else -> "找到 ${result.targetCount} 条目标通知，新增 ${result.capturedCount} 条记录"
         }
@@ -262,15 +308,47 @@ class MainActivity : Activity() {
             val result = runCatching {
                 val configuration = RelayProtocol.parseConfiguration(raw)
                 RelaySettings(this).save(configuration)
-                AppNotificationListenerService.requestRelaySyncReload()
+                configuration to AppNotificationListenerService.requestRelaySyncReload()
             }
             runOnUiThread {
-                result.onSuccess {
-                    relayEditor.text.clear()
-                    toast("中继配置已加密保存，已请求同步")
+                result.onSuccess { (configuration, syncRequested) ->
+                    relayEditor.setText(RelayProtocol.encodeConfiguration(configuration))
+                    toast(
+                        if (syncRequested) {
+                            "中继配置已加密保存，已请求同步"
+                        } else {
+                            "中继配置已保存；通知服务连接后会自动同步"
+                        }
+                    )
                     refresh()
                 }.onFailure { toast("保存失败：${it.localizedMessage ?: it.javaClass.simpleName}") }
             }
+        }
+    }
+
+    private fun sendNetworkSyncTest() {
+        if (AppNotificationListenerService.requestNetworkSyncTest()) {
+            toast("测试配送状态已写入日志，并通过可用路线发送到 Mac")
+            statusText.postDelayed({ refresh() }, 600)
+            statusText.postDelayed({ refresh() }, 2_000)
+        } else {
+            NotificationListenerService.requestRebind(listenerComponent())
+            toast("监听服务尚未连接，已请求重连；请稍后再次测试")
+        }
+    }
+
+    private fun saveCustomDeliveryRules() {
+        val result = runCatching {
+            val rules = CustomDeliveryRuleCodec.decode(customRuleEditor.text.toString())
+            CaptureSettings(this).customDeliveryRules = rules
+            rules
+        }
+        result.onSuccess { rules ->
+            customRuleEditor.setText(CustomDeliveryRuleCodec.encode(rules))
+            toast("已保存 ${rules.size} 条自定义规则，其中 ${rules.count { it.syncToMac }} 条会同步到 Mac")
+            refresh()
+        }.onFailure { error ->
+            toast("规则格式无效：${error.localizedMessage ?: error.javaClass.simpleName}")
         }
     }
 

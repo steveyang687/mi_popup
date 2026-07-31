@@ -4,6 +4,7 @@ import Foundation
 public enum RelayConfigurationError: LocalizedError, Equatable {
     case invalidJSON
     case unexpectedFields([String])
+    case missingFields([String])
     case insecureBaseURL
     case invalidChannelId
     case invalidToken
@@ -16,6 +17,8 @@ public enum RelayConfigurationError: LocalizedError, Equatable {
             "中继配置不是有效的 JSON 对象。"
         case .unexpectedFields(let fields):
             "中继配置包含未声明字段：\(fields.joined(separator: "、"))。"
+        case .missingFields(let fields):
+            "中继配置缺少字段：\(fields.joined(separator: "、"))。"
         case .insecureBaseURL:
             "中继地址必须是没有账号、查询参数或子路径的 HTTPS 地址。"
         case .invalidChannelId:
@@ -47,14 +50,38 @@ public struct RelayConfiguration: Sendable {
     }
 
     public static func load(from url: URL? = nil) throws -> RelayConfiguration? {
+        guard let data = try readData(from: url) else { return nil }
+        return try decode(data)
+    }
+
+    public static func readJSON(from url: URL? = nil) throws -> String? {
+        guard let data = try readData(from: url),
+              let json = String(data: data, encoding: .utf8)
+        else { return nil }
+        return json
+    }
+
+    @discardableResult
+    public static func save(json: String, to url: URL? = nil) throws -> RelayConfiguration {
+        let data = Data(json.utf8)
+        let configuration = try decode(data)
         let target = url ?? defaultFileURL
-        guard FileManager.default.fileExists(atPath: target.path) else { return nil }
-        let attributes = try FileManager.default.attributesOfItem(atPath: target.path)
-        guard let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue,
-              permissions & 0o077 == 0 else {
-            throw RelayConfigurationError.insecureFilePermissions
-        }
-        return try decode(Data(contentsOf: target))
+        let directory = target.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: directory.path
+        )
+        try data.write(to: target, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: target.path
+        )
+        return configuration
     }
 
     static func decode(_ data: Data) throws -> RelayConfiguration {
@@ -63,8 +90,12 @@ public struct RelayConfiguration: Sendable {
         }
         let allowed = Set(["baseURL", "channelId", "token", "encryptionKey"])
         let unexpected = Set(object.keys).subtracting(allowed).sorted()
-        guard unexpected.isEmpty, object.keys.count == allowed.count else {
+        guard unexpected.isEmpty else {
             throw RelayConfigurationError.unexpectedFields(unexpected)
+        }
+        let missing = allowed.subtracting(object.keys).sorted()
+        guard missing.isEmpty else {
+            throw RelayConfigurationError.missingFields(missing)
         }
         guard let rawBaseURL = object["baseURL"] as? String,
               let baseURL = URL(string: rawBaseURL),
@@ -99,6 +130,17 @@ public struct RelayConfiguration: Sendable {
             token: token,
             encryptionKey: encryptionKey
         )
+    }
+
+    private static func readData(from url: URL?) throws -> Data? {
+        let target = url ?? defaultFileURL
+        guard FileManager.default.fileExists(atPath: target.path) else { return nil }
+        let attributes = try FileManager.default.attributesOfItem(atPath: target.path)
+        guard let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue,
+              permissions & 0o077 == 0 else {
+            throw RelayConfigurationError.insecureFilePermissions
+        }
+        return try Data(contentsOf: target)
     }
 
     var streamURL: URL {

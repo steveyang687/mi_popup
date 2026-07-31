@@ -33,6 +33,35 @@ struct DeliveryNotificationParserTests {
     }
 
     @Test
+    func parsesTaobaoInstantDeliveryTimeRangeWithKnightWording() {
+        let update = DeliveryNotificationParser.parse(
+            notification(
+                sourcePackage: "com.taobao.taobao",
+                title: "预计11:25-11:45送达",
+                text: "骑士正在配送"
+            )
+        )
+
+        #expect(update?.provider == .taobaoInstant)
+        #expect(update?.stage == .delivering)
+        #expect(update?.etaText == "11:25-11:45")
+    }
+
+    @Test
+    func parsesTaobaoInstantLockerDeliveryAsDelivered() {
+        let update = DeliveryNotificationParser.parse(
+            notification(
+                sourcePackage: "com.taobao.taobao",
+                title: "订单已存入智能柜",
+                text: "您的佬街佬味·手撕鸡订单已存入智能柜，请尽快取货"
+            )
+        )
+
+        #expect(update?.provider == .taobaoInstant)
+        #expect(update?.stage == .delivered)
+    }
+
+    @Test
     func ignoresObservedNonDeliveryNotifications() {
         let samples = [
             notification(title: "【美团月付】剩余额度更新", text: "成功支付后查看剩余额度"),

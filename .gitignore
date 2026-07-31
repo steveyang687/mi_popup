@@ -8,3 +8,7 @@ apps/macos/.build-cache/
 apps/macos/.build-home/
 apps/macos/.package/
 dist/
+services/relay/.env
+services/relay/data/
+services/relay/generated/
+services/relay/node_modules/

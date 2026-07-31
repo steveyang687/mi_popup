@@ -17,6 +17,11 @@ import java.util.concurrent.Executors
  * updates enter LAN or end-to-end encrypted relay synchronization.
  */
 class AppNotificationListenerService : NotificationListenerService() {
+    private data class DeliveryEnqueueResult(
+        val lanEnqueued: Boolean,
+        val relayEnqueued: Boolean
+    )
+
     private val writer = Executors.newSingleThreadExecutor()
     private val recentContent = LinkedHashMap<String, String>(MAX_RECENT_EVENTS, 0.75f, true)
 
@@ -74,12 +79,9 @@ class AppNotificationListenerService : NotificationListenerService() {
                     relevantPackages = emptyList(),
                     errorMessage = error.localizedMessage ?: "系统拒绝读取活动通知"
                 ).also { lastActiveScan = it }
-            }
+        }
         val relevantPackages = items.map(StatusBarNotification::getPackageName)
             .distinct()
-            .filter { packageName ->
-                settings.matches(packageName) || RELEVANT_PACKAGE_HINTS.any(packageName::contains)
-            }
             .sorted()
         val targets = items.filter { settings.matches(it.packageName) }
         val captured = targets.count { captureNotification(it, "active") }
@@ -90,6 +92,45 @@ class AppNotificationListenerService : NotificationListenerService() {
             relevantPackages = relevantPackages,
             errorMessage = null
         ).also { lastActiveScan = it }
+    }
+
+    fun enqueueNetworkSyncTest(): Boolean {
+        val now = System.currentTimeMillis()
+        val eventId = UUID.randomUUID().toString()
+        val orderKey = sha256("mipopup-network-test:$eventId")
+        val update = DeliveryUpdate.networkSyncTest(
+            eventId = eventId,
+            capturedAt = now,
+            orderKey = orderKey,
+            sourcePackage = packageName
+        )
+        val record = JSONObject()
+            .put("schemaVersion", 1)
+            .put("eventId", eventId)
+            .put("eventKind", "test")
+            .put("capturedAt", now)
+            .put("postedAt", now)
+            .put("sourcePackage", packageName)
+            .put("appName", "MiPopup 测试")
+            .put("notificationKeyHash", orderKey)
+            .put("notificationId", -1)
+            .put("title", "网络同步测试")
+            .put("text", "测试配送状态已加入局域网和公网中继队列")
+            .put("delivery", update.toJson())
+            .put("deliverySyncEnabled", true)
+
+        acquireCaptureWakeLock()
+        writer.execute {
+            val result = enqueueDeliveryUpdate(update)
+            try {
+                CaptureLogStore(applicationContext).append(record)
+            } finally {
+                if (result.lanEnqueued) lanSync?.kick()
+                if (result.relayEnqueued) relaySync?.kick()
+                releaseCaptureWakeLock()
+            }
+        }
+        return true
     }
 
     private fun captureNotification(item: StatusBarNotification, initialEventKind: String): Boolean {
@@ -161,7 +202,7 @@ class AppNotificationListenerService : NotificationListenerService() {
             .put("clearable", item.isClearable)
             .also { json -> focusParam?.let { json.put("focusParam", it) } }
 
-        val deliveryUpdate = DeliveryNotificationParser.parse(
+        val parsedDelivery = DeliveryNotificationParser.parseConfigured(
             DeliveryNotificationInput(
                 eventId = record.getString("eventId"),
                 eventKind = eventKind,
@@ -175,61 +216,28 @@ class AppNotificationListenerService : NotificationListenerService() {
                 textLines = textLines,
                 groupSummary = groupSummary,
                 focusParam = focusParam
-            )
+            ),
+            settings.customDeliveryRules
         )
+        val deliveryUpdate = parsedDelivery?.update
         deliveryUpdate?.let { record.put("delivery", it.toJson()) }
-        if (deliveryUpdate != null) acquireCaptureWakeLock()
+        parsedDelivery?.let { parsed ->
+            record.put("deliverySyncEnabled", parsed.syncToMac)
+        }
+        if (parsedDelivery?.syncToMac == true) acquireCaptureWakeLock()
 
         writer.execute {
-            var lanEnqueued = false
-            var relayEnqueued = false
-            deliveryUpdate?.let { update ->
-                val entry = runCatching {
-                    val sequence = identityStore.nextSequence()
-                    val envelope = LanProtocol.encodeDeliveryUpdate(
-                        deviceId = identityStore.deviceId(),
-                        sequence = sequence,
-                        sentAt = System.currentTimeMillis(),
-                        deliveryUpdateJson = update.toJson().toString()
-                    )
-                    LanOutboxEntry(
-                        eventId = update.eventId,
-                        sequence = sequence,
-                        envelopeJson = envelope
-                    )
-                }.onFailure { error ->
-                    LanSyncMonitor.update(
-                        phase = LanSyncPhase.IDLE,
-                        pendingCount = runCatching { outbox.pendingCount() }.getOrDefault(0),
-                        message = "配送状态封装失败：${error.localizedMessage ?: error.javaClass.simpleName}"
-                    )
-                }.getOrNull()
-                if (entry != null) {
-                    lanEnqueued = runCatching { outbox.enqueue(entry) }
-                        .onFailure { error ->
-                            LanSyncMonitor.update(
-                                LanSyncPhase.IDLE,
-                                runCatching { outbox.pendingCount() }.getOrDefault(0),
-                                "局域网入队失败：${error.localizedMessage ?: error.javaClass.simpleName}"
-                            )
-                        }.getOrDefault(false)
-                    relayEnqueued = runCatching { relayOutbox.enqueue(entry) }
-                        .onFailure { error ->
-                            RelaySyncMonitor.update(
-                                RelaySyncPhase.IDLE,
-                                runCatching { relayOutbox.pendingCount() }.getOrDefault(0),
-                                "中继入队失败：${error.localizedMessage ?: error.javaClass.simpleName}"
-                            )
-                        }.getOrDefault(false)
-                }
-            }
+            val result = parsedDelivery
+                ?.takeIf { it.syncToMac }
+                ?.let { enqueueDeliveryUpdate(it.update) }
+                ?: DeliveryEnqueueResult(lanEnqueued = false, relayEnqueued = false)
 
             try {
                 CaptureLogStore(applicationContext).append(record)
             } finally {
-                if (lanEnqueued) lanSync?.kick()
-                if (relayEnqueued) relaySync?.kick()
-                if (deliveryUpdate != null) releaseCaptureWakeLock()
+                if (result.lanEnqueued) lanSync?.kick()
+                if (result.relayEnqueued) relaySync?.kick()
+                if (parsedDelivery?.syncToMac == true) releaseCaptureWakeLock()
             }
         }
         return true
@@ -287,6 +295,47 @@ class AppNotificationListenerService : NotificationListenerService() {
         }
     }
 
+    private fun enqueueDeliveryUpdate(update: DeliveryUpdate): DeliveryEnqueueResult {
+        val entry = runCatching {
+            val sequence = identityStore.nextSequence()
+            val envelope = LanProtocol.encodeDeliveryUpdate(
+                deviceId = identityStore.deviceId(),
+                sequence = sequence,
+                sentAt = System.currentTimeMillis(),
+                deliveryUpdateJson = update.toJson().toString()
+            )
+            LanOutboxEntry(
+                eventId = update.eventId,
+                sequence = sequence,
+                envelopeJson = envelope
+            )
+        }.onFailure { error ->
+            LanSyncMonitor.update(
+                phase = LanSyncPhase.IDLE,
+                pendingCount = runCatching { outbox.pendingCount() }.getOrDefault(0),
+                message = "配送状态封装失败：${error.localizedMessage ?: error.javaClass.simpleName}"
+            )
+        }.getOrNull() ?: return DeliveryEnqueueResult(false, false)
+
+        val lanEnqueued = runCatching { outbox.enqueue(entry) }
+            .onFailure { error ->
+                LanSyncMonitor.update(
+                    LanSyncPhase.IDLE,
+                    runCatching { outbox.pendingCount() }.getOrDefault(0),
+                    "局域网入队失败：${error.localizedMessage ?: error.javaClass.simpleName}"
+                )
+            }.getOrDefault(false)
+        val relayEnqueued = runCatching { relayOutbox.enqueue(entry) }
+            .onFailure { error ->
+                RelaySyncMonitor.update(
+                    RelaySyncPhase.IDLE,
+                    runCatching { relayOutbox.pendingCount() }.getOrDefault(0),
+                    "中继入队失败：${error.localizedMessage ?: error.javaClass.simpleName}"
+                )
+            }.getOrDefault(false)
+        return DeliveryEnqueueResult(lanEnqueued, relayEnqueued)
+    }
+
     private fun baseRecord(
         item: StatusBarNotification,
         keyHash: String,
@@ -322,8 +371,6 @@ class AppNotificationListenerService : NotificationListenerService() {
     companion object {
         private const val MAX_RECENT_EVENTS = 512
         private const val CAPTURE_WAKE_LOCK_TIMEOUT_MILLIS = 15_000L
-        private val RELEVANT_PACKAGE_HINTS = listOf("meituan", "sankuai", "taobao", "eleme", "miui", "systemui")
-
         @Volatile
         private var activeInstance: AppNotificationListenerService? = null
 
@@ -344,6 +391,9 @@ class AppNotificationListenerService : NotificationListenerService() {
             service.relaySync?.kick()
             return true
         }
+
+        fun requestNetworkSyncTest(): Boolean =
+            activeInstance?.enqueueNetworkSyncTest() ?: false
 
         fun lastActiveScanResult(): ActiveNotificationScanResult? = lastActiveScan
     }

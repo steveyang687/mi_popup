@@ -4,7 +4,8 @@ import org.json.JSONObject
 
 enum class DeliveryProvider(val wireValue: String, val displayName: String) {
     MEITUAN("meituan", "美团"),
-    TAOBAO_INSTANT("taobao_instant", "淘宝闪购")
+    TAOBAO_INSTANT("taobao_instant", "淘宝闪购"),
+    CUSTOM("custom", "自定义来源")
 }
 
 enum class DeliveryStage(val wireValue: String, val displayName: String) {
@@ -17,7 +18,11 @@ enum class DeliveryStage(val wireValue: String, val displayName: String) {
     ARRIVING("arriving", "即将送达"),
     DELIVERED("delivered", "已送达"),
     CANCELLED("cancelled", "已取消"),
-    UNKNOWN("unknown", "订单进行中")
+    UNKNOWN("unknown", "订单进行中");
+
+    companion object {
+        fun fromWireValue(value: String): DeliveryStage? = entries.firstOrNull { it.wireValue == value }
+    }
 }
 
 enum class DeliverySourceFormat(val wireValue: String) {
@@ -42,11 +47,12 @@ data class DeliveryNotificationInput(
 
 data class DeliveryUpdate(
     val schemaVersion: Int = 1,
-    val parserVersion: Int = 2,
+    val parserVersion: Int = 4,
     val eventId: String,
     val sourceEventKind: String,
     val capturedAt: Long,
     val provider: DeliveryProvider,
+    val providerName: String? = null,
     val stage: DeliveryStage,
     val statusText: String,
     val etaText: String?,
@@ -70,27 +76,82 @@ data class DeliveryUpdate(
         .put("orderKey", orderKey)
         .put("sourcePackage", sourcePackage)
         .also { json ->
+            providerName?.let { json.put("providerName", it) }
             etaText?.let { json.put("etaText", it) }
             statusDetail?.let { json.put("statusDetail", it) }
             progressPercent?.let { json.put("progressPercent", it) }
             json.put("sourceFormat", sourceFormat.wireValue)
         }
+
+    companion object {
+        fun networkSyncTest(
+            eventId: String,
+            capturedAt: Long,
+            orderKey: String,
+            sourcePackage: String
+        ) = DeliveryUpdate(
+            eventId = eventId,
+            sourceEventKind = "posted",
+            capturedAt = capturedAt,
+            provider = DeliveryProvider.CUSTOM,
+            providerName = "MiPopup 测试",
+            stage = DeliveryStage.DELIVERING,
+            statusText = DeliveryStage.DELIVERING.displayName,
+            etaText = "15 分钟",
+            statusDetail = "网络同步测试消息",
+            progressPercent = 50,
+            sourceFormat = DeliverySourceFormat.STANDARD_NOTIFICATION,
+            confidence = 1.0,
+            orderKey = orderKey,
+            sourcePackage = sourcePackage
+        )
+    }
 }
 
+data class ParsedDeliveryUpdate(
+    val update: DeliveryUpdate,
+    val syncToMac: Boolean
+)
+
 object DeliveryNotificationParser {
-    fun parse(input: DeliveryNotificationInput): DeliveryUpdate? {
+    fun parse(input: DeliveryNotificationInput): DeliveryUpdate? =
+        parseConfigured(input, emptyList())?.update
+
+    fun parseConfigured(
+        input: DeliveryNotificationInput,
+        customRules: List<CustomDeliveryRule>
+    ): ParsedDeliveryUpdate? {
         if (input.eventKind == "removed" || input.groupSummary) return null
 
-        val provider = providerFor(input.sourcePackage) ?: return null
         val standardFields = listOf(input.title, input.text, input.bigText, input.subText) + input.textLines
         val normalizedStandardFields = standardFields.map(::normalize).filter(String::isNotBlank)
         val standardContent = normalizedStandardFields.joinToString(" ")
         val focusPayload = HyperOSFocusNotification.parse(input.focusParam)
         val focusFields = focusPayload?.textCandidates?.map(FocusTextCandidate::value).orEmpty()
         val focusContent = focusFields.joinToString(" ")
-        val content = listOf(focusContent, standardContent).filter(String::isNotBlank).joinToString(" ")
 
-        if (content.contains("GroupSummary", ignoreCase = true)) return null
+        if (listOf(focusContent, standardContent).any { it.contains("GroupSummary", ignoreCase = true) }) {
+            return null
+        }
+        customRules.asSequence()
+            .filter { it.sourcePackage == input.sourcePackage }
+            .mapNotNull { rule ->
+                parseCustomRule(input, rule, standardContent, focusContent, focusPayload)
+            }
+            .firstOrNull()
+            ?.let { return it }
+
+        return parseBuiltInRule(input, standardContent, focusContent, focusPayload)
+    }
+
+    private fun parseBuiltInRule(
+        input: DeliveryNotificationInput,
+        standardContent: String,
+        focusContent: String,
+        focusPayload: HyperOSFocusPayload?
+    ): ParsedDeliveryUpdate? {
+        val provider = providerFor(input.sourcePackage) ?: return null
+        val content = listOf(focusContent, standardContent).filter(String::isNotBlank).joinToString(" ")
         if (focusPayload == null && EXCLUDED_TERMS.any(content::contains)) return null
         if (provider == DeliveryProvider.TAOBAO_INSTANT &&
             input.sourcePackage == "com.taobao.taobao" &&
@@ -108,27 +169,79 @@ object DeliveryNotificationParser {
         } else {
             DeliverySourceFormat.HYPEROS_FOCUS
         }
-        return DeliveryUpdate(
-            eventId = input.eventId,
-            sourceEventKind = input.eventKind,
-            capturedAt = input.capturedAt,
-            provider = provider,
-            stage = stage,
-            statusText = stage.displayName,
-            etaText = extractEta(focusContent) ?: extractEta(standardContent),
-            statusDetail = selectStatusDetail(focusPayload?.textCandidates.orEmpty()),
-            progressPercent = focusPayload?.progressPercent,
-            sourceFormat = sourceFormat,
-            confidence = when {
-                focusPayload != null && stage != DeliveryStage.UNKNOWN -> 0.98
-                focusPayload != null -> 0.92
-                stage == DeliveryStage.UNKNOWN -> 0.95
-                else -> 0.85
-            },
-            orderKey = input.notificationKeyHash,
-            sourcePackage = input.sourcePackage
+        return ParsedDeliveryUpdate(
+            update = DeliveryUpdate(
+                eventId = input.eventId,
+                sourceEventKind = input.eventKind,
+                capturedAt = input.capturedAt,
+                provider = provider,
+                stage = stage,
+                statusText = stage.displayName,
+                etaText = extractEta(focusContent) ?: extractEta(standardContent),
+                statusDetail = selectStatusDetail(focusPayload?.textCandidates.orEmpty()),
+                progressPercent = focusPayload?.progressPercent,
+                sourceFormat = sourceFormat,
+                confidence = when {
+                    focusPayload != null && stage != DeliveryStage.UNKNOWN -> 0.98
+                    focusPayload != null -> 0.92
+                    stage == DeliveryStage.UNKNOWN -> 0.95
+                    else -> 0.85
+                },
+                orderKey = input.notificationKeyHash,
+                sourcePackage = input.sourcePackage
+            ),
+            syncToMac = true
         )
     }
+
+    private fun parseCustomRule(
+        input: DeliveryNotificationInput,
+        rule: CustomDeliveryRule,
+        standardContent: String,
+        focusContent: String,
+        focusPayload: HyperOSFocusPayload?
+    ): ParsedDeliveryUpdate? {
+        val candidates = buildList {
+            if (rule.sourceFormat != CustomDeliverySourceFormat.STANDARD_NOTIFICATION && focusContent.isNotBlank()) {
+                add(NotificationContent(focusContent, DeliverySourceFormat.HYPEROS_FOCUS))
+            }
+            if (rule.sourceFormat != CustomDeliverySourceFormat.HYPEROS_FOCUS && standardContent.isNotBlank()) {
+                add(NotificationContent(standardContent, DeliverySourceFormat.STANDARD_NOTIFICATION))
+            }
+        }
+        val matched = candidates.firstOrNull { candidate ->
+            rule.matchAnyTerms.any(candidate.text::contains) &&
+                (rule.contextAnyTerms.isEmpty() || rule.contextAnyTerms.any(candidate.text::contains))
+        } ?: return null
+        return ParsedDeliveryUpdate(
+            update = DeliveryUpdate(
+                eventId = input.eventId,
+                sourceEventKind = input.eventKind,
+                capturedAt = input.capturedAt,
+                provider = DeliveryProvider.CUSTOM,
+                providerName = rule.displayName,
+                stage = rule.stage,
+                statusText = rule.stage.displayName,
+                etaText = extractEta(matched.text),
+                statusDetail = null,
+                progressPercent = if (matched.sourceFormat == DeliverySourceFormat.HYPEROS_FOCUS) {
+                    focusPayload?.progressPercent
+                } else {
+                    null
+                },
+                sourceFormat = matched.sourceFormat,
+                confidence = if (matched.sourceFormat == DeliverySourceFormat.HYPEROS_FOCUS) 0.98 else 0.9,
+                orderKey = input.notificationKeyHash,
+                sourcePackage = input.sourcePackage
+            ),
+            syncToMac = rule.syncToMac
+        )
+    }
+
+    private data class NotificationContent(
+        val text: String,
+        val sourceFormat: DeliverySourceFormat
+    )
 
     private fun providerFor(packageName: String): DeliveryProvider? = when (packageName) {
         "com.sankuai.meituan", "com.sankuai.meituan.takeoutnew" -> DeliveryProvider.MEITUAN
@@ -192,11 +305,15 @@ object DeliveryNotificationParser {
         "在途"
     )
 
-    // Only UNKNOWN is confirmed by the current fixture. Specific stages also require
-    // explicit food-delivery context until real notifications cover those transitions.
     private val STAGE_RULES = listOf(
         DeliveryStage.CANCELLED to listOf("订单已取消", "订单取消", "已取消"),
-        DeliveryStage.DELIVERED to listOf("已送达", "配送完成", "订单已完成"),
+        DeliveryStage.DELIVERED to listOf(
+            "已送达",
+            "配送完成",
+            "订单已完成",
+            "订单已存入智能柜",
+            "已存入智能柜"
+        ),
         DeliveryStage.ARRIVING to listOf("即将送达", "即将到达", "马上送达", "快到了"),
         DeliveryStage.COURIER_PICKING_UP to listOf("取货中", "取餐中", "骑手已到店", "骑手到店", "前往商家", "赶往商家"),
         DeliveryStage.DELIVERING to listOf(
@@ -219,12 +336,17 @@ object DeliveryNotificationParser {
     private val DELIVERY_CONTEXT_TERMS = listOf(
         "外卖",
         "骑手",
+        "骑士",
         "送餐",
         "送达",
         "送货",
         "备餐",
         "取餐",
-        "商家"
+        "商家",
+        "智能柜",
+        "开柜",
+        "取件码",
+        "柜门号"
     )
 
     private val ETA_PATTERNS = listOf(

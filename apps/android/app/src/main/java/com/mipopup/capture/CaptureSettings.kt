@@ -29,7 +29,19 @@ class CaptureSettings(context: Context) {
             return generated
         }
 
-    fun matches(packageName: String): Boolean = PackageMatcher.matches(packageName, targetPackages)
+    var customDeliveryRules: List<CustomDeliveryRule>
+        get() = runCatching {
+            CustomDeliveryRuleCodec.decode(preferences.getString(KEY_CUSTOM_DELIVERY_RULES, "[]").orEmpty())
+        }.getOrDefault(emptyList())
+        set(value) {
+            preferences.edit()
+                .putString(KEY_CUSTOM_DELIVERY_RULES, CustomDeliveryRuleCodec.encode(value))
+                .apply()
+        }
+
+    fun matches(packageName: String): Boolean =
+        PackageMatcher.matches(packageName, targetPackages) ||
+            customDeliveryRules.any { it.sourcePackage == packageName }
 
     companion object {
         val DEFAULT_PACKAGES = linkedSetOf(
@@ -40,6 +52,7 @@ class CaptureSettings(context: Context) {
         )
 
         private const val KEY_TARGET_PACKAGES = "target_packages"
+        private const val KEY_CUSTOM_DELIVERY_RULES = "custom_delivery_rules"
         private const val KEY_SALT = "key_salt"
 
         fun parsePackages(raw: String): Set<String> = raw

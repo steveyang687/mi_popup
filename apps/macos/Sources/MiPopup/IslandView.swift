@@ -1,3 +1,4 @@
+import AppKit
 import MiPopupCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -9,6 +10,7 @@ struct IslandView: View {
     let onTabChange: (IslandTab) -> Void
     let onRefresh: () -> Void
     let onImport: () -> Void
+    let onSaveRelayConfiguration: (String) -> Void
     let onDismissDelivery: () -> Void
     let onQuit: () -> Void
     let onDropFile: (URL) -> Void
@@ -28,6 +30,8 @@ struct IslandView: View {
                             quotaContent
                         case .models:
                             modelIntelligenceContent
+                        case .relay:
+                            relayConfigurationContent
                         }
                     }
 
@@ -59,6 +63,96 @@ struct IslandView: View {
                 }
             }
             return true
+        }
+    }
+
+    private var relayConfigurationContent: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 9) {
+                Image(systemName: model.isRelayConfigured ? "checkmark.shield.fill" : "network.slash")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(model.isRelayConfigured ? Color.green : Color.white.opacity(0.45))
+                    .frame(width: 28, height: 28)
+                    .background(Color.white.opacity(0.055), in: Circle())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.isRelayConfigured ? "公网中继已配置" : "尚未配置公网中继")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.88))
+                    Text(model.relayConfigurationError ?? model.relayStatusDetail)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(
+                            model.relayConfigurationError == nil
+                                ? Color.white.opacity(0.44)
+                                : Color.orange.opacity(0.9)
+                        )
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 4)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+
+            ZStack(alignment: .topLeading) {
+                if model.relayConfigurationDraft.isEmpty {
+                    Text("粘贴包含 baseURL、channelId、token 和 encryptionKey 的完整 JSON")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.3))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 9)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $model.relayConfigurationDraft)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .scrollContentBackground(.hidden)
+                    .padding(4)
+            }
+            .frame(height: 104)
+            .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+
+            HStack(spacing: 7) {
+                Button {
+                    if let text = NSPasteboard.general.string(forType: .string) {
+                        model.relayConfigurationDraft = text
+                    }
+                } label: {
+                    Label("粘贴", systemImage: "doc.on.clipboard")
+                }
+                .buttonStyle(RelayConfigurationButtonStyle())
+
+                if !model.relayConfigurationDraft.isEmpty {
+                    Button("清空输入") {
+                        model.relayConfigurationDraft = ""
+                        model.relayConfigurationError = nil
+                    }
+                    .buttonStyle(RelayConfigurationButtonStyle())
+                }
+
+                Spacer(minLength: 4)
+
+                Button {
+                    onSaveRelayConfiguration(model.relayConfigurationDraft)
+                } label: {
+                    Label("保存并连接", systemImage: "network.badge.shield.half.filled")
+                }
+                .buttonStyle(RelayConfigurationButtonStyle(isProminent: true))
+                .disabled(
+                    model.relayConfigurationDraft
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .isEmpty
+                )
+            }
+
+            Text("这里显示完整凭据；请仅在自己的设备操作，配置文件仅允许当前用户读取。")
+                .font(.system(size: 9))
+                .foregroundStyle(.white.opacity(0.34))
+                .lineLimit(1)
         }
     }
 
@@ -121,7 +215,7 @@ struct IslandView: View {
                 .fill(Color.orange)
                 .frame(width: 8, height: 8)
                 .shadow(color: Color.orange.opacity(0.7), radius: 5)
-            Text("\(delivery.provider.displayName) · \(delivery.stage.displayName)")
+            Text("\(delivery.providerDisplayName) · \(delivery.stage.displayName)")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.white)
                 .lineLimit(1)
@@ -225,7 +319,7 @@ struct IslandView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 5) {
-                        Text(delivery.provider.displayName)
+                        Text(delivery.providerDisplayName)
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(.white)
                         Text(delivery.stage.displayName)
@@ -425,19 +519,21 @@ struct IslandView: View {
                 Text(model.refreshDetail)
             }
             Spacer(minLength: 4)
-            Button(action: onRefresh) {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.clockwise")
-                    Text("刷新")
+            if model.selectedTab != .relay {
+                Button(action: onRefresh) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.clockwise")
+                        Text("刷新")
+                    }
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.white.opacity(0.08), in: Capsule())
                 }
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.82))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Color.white.opacity(0.08), in: Capsule())
+                .buttonStyle(.plain)
+                .disabled(model.isRefreshingSelectedTab)
             }
-            .buttonStyle(.plain)
-            .disabled(model.isRefreshingSelectedTab)
 
             if model.selectedTab == .quota {
                 Button(action: onImport) {
@@ -614,5 +710,22 @@ struct IslandView: View {
             startPoint: .top,
             endPoint: .bottom
         )
+    }
+}
+
+private struct RelayConfigurationButtonStyle: ButtonStyle {
+    var isProminent = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.white.opacity(configuration.isPressed ? 0.62 : 0.86))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(
+                isProminent ? Color.blue.opacity(0.32) : Color.white.opacity(0.07),
+                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 }

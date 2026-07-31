@@ -53,13 +53,11 @@ Android:
 
 macOS:
 
-```bash
-mkdir -p "$HOME/Library/Application Support/MiPopup"
-cp generated/client-config.json "$HOME/Library/Application Support/MiPopup/relay-config.json"
-chmod 600 "$HOME/Library/Application Support/MiPopup/relay-config.json"
-```
+1. Expand MiPopup and open **中继**, or choose **配置公网中继…** from the menu bar.
+2. Paste the whole JSON and select **保存并连接**.
+3. Confirm that the status changes to **已连接公网中继**.
 
-Restart MiPopup after creating or replacing the file. LAN delivery remains enabled in parallel; `eventId` deduplication prevents duplicate UI updates.
+MiPopup keeps the current JSON visible for editing, validates it before replacing the existing configuration, and stores the file with mode `0600`. LAN delivery remains enabled in parallel; `eventId` deduplication prevents duplicate UI updates.
 
 ## Operations
 

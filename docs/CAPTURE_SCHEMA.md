@@ -17,7 +17,7 @@ Android 的通知更新仍会回调 `onNotificationPosted`；采集器使用加�
 | --- | --- | --- |
 | `schemaVersion` | integer | 当前固定为 `1` |
 | `eventId` | string | 每条采集事件的 UUID |
-| `eventKind` | string | `posted`、`active`、`updated` 或 `removed`；`active` 表示服务连接后主动扫描到的已有通知 |
+| `eventKind` | string | `posted`、`active`、`updated`、`removed` 或 `test`；`active` 表示服务连接后主动扫描到的已有通知，`test` 表示用户主动生成的网络同步测试记录 |
 | `capturedAt` | integer | 采集器收到回调的时间 |
 | `postedAt` | integer | Android `StatusBarNotification.postTime` |
 | `sourcePackage` | string | 实际来源包名，是适配器路由的主键 |
@@ -42,6 +42,7 @@ Android 的通知更新仍会回调 `onNotificationPosted`；采集器使用加�
 | `ongoing` | boolean | 是否为 ongoing 通知 |
 | `clearable` | boolean | 用户是否可清除 |
 | `delivery` | object? | Android 端确认命中配送规则时写入的最小化解析结果；字段契约见 `protocol/schemas/delivery-update-v1.schema.json` |
+| `deliverySyncEnabled` | boolean? | 命中配送规则时，该规则是否允许将 `delivery` 发送到 Mac；只影响网络同步，不影响本地日志 |
 
 `removed` 事件只保证包含基础字段，不保证包含通知文本字段。因此后续解析器应按 `notificationKeyHash` 维护最后一次可见内容，但不能把通知移除直接映射为业务终态。
 
@@ -49,7 +50,7 @@ Android 的通知更新仍会回调 `onNotificationPosted`；采集器使用加�
 
 `delivery` 是可选字段。未命中、营销通知、普通淘宝快递、分组摘要和 `removed` 事件均不写入该字段。它只包含固定状态文案、ETA、置信度、来源包名和不可逆通知 key hash，不重复复制原始通知正文。
 
-当前真实样本只确认了美团“外卖订单正在进行中”，因此映射为：
+下例展示美团“外卖订单正在进行中”的 `unknown` 映射：
 
 ```json
 {
@@ -67,7 +68,27 @@ Android 的通知更新仍会回调 `onNotificationPosted`；采集器使用加�
 }
 ```
 
-`unknown` 表示已经确认存在外卖订单，但通知没有提供足够信息判断接单、备餐、取货或配送阶段。淘宝闪购目前只有营销负样本，尚未宣称支持具体配送状态。
+`unknown` 表示已经确认存在外卖订单，但通知没有提供足够信息判断接单、备餐、取货或配送阶段。已确认淘宝闪购真实样本：`预计11:25-11:45送达 — 骑士正在配送` 映射为 `delivering`，`订单已存入智能柜` 映射为 `delivered`（配送已完成，待用户取柜）。普通淘宝快递仍会按包裹关键词排除。
+
+## 自定义来源规则
+
+Android 设置页中的“自定义配送解析规则”接受 JSON 数组。每条规则以 `package` 选择来源应用，以 `format` 选择 `auto`、`standard_notification` 或 `hyperos_focus`，并用 `matchAny`（至少一个关键词）与可选的 `contextAny` 限定匹配条件。`stage` 使用配送状态 wire value，例如 `delivering`、`arriving`、`delivered`；`syncToMac` 决定这条规则是否进入 LAN/Relay 队列。规则按数组顺序匹配，优先于内置美团/淘宝规则。
+
+```json
+[
+  {
+    "name": "京东秒送",
+    "package": "com.example.delivery",
+    "format": "standard_notification",
+    "stage": "delivering",
+    "matchAny": ["骑手正在配送", "配送中"],
+    "contextAny": ["秒送", "骑手"],
+    "syncToMac": true
+  }
+]
+```
+
+自定义规则只传输应用显示名称、固定状态、ETA、格式、进度和不可逆通知 key hash。通知标题、正文和关键词命中的原文仍只在 Android 私有日志中保存。`provider` 为 `custom` 时，`delivery.providerName` 保存规则的 `name`，供 Mac 显示。
 
 ## 与网络同步的关系
 

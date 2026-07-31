@@ -43,8 +43,14 @@
     "provider": {
       "enum": [
         "meituan",
-        "taobao_instant"
+        "taobao_instant",
+        "custom"
       ]
+    },
+    "providerName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 48
     },
     "state": {
       "enum": [
@@ -68,6 +74,22 @@
       "type": "string",
       "minLength": 1
     },
+    "statusDetail": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "progressPercent": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "sourceFormat": {
+      "enum": [
+        "standard_notification",
+        "hyperos_focus"
+      ]
+    },
     "confidence": {
       "type": "number",
       "minimum": 0,
@@ -81,5 +103,28 @@
       "type": "string",
       "minLength": 1
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "provider": {
+            "const": "custom"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "providerName"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "providerName"
+          ]
+        }
+      }
+    }
+  ]
 }

@@ -13,6 +13,7 @@ struct ProviderQuotaDisplayState: Identifiable, Equatable {
 enum IslandTab: String, CaseIterable, Identifiable {
     case quota
     case models
+    case relay
 
     var id: Self { self }
 
@@ -20,6 +21,7 @@ enum IslandTab: String, CaseIterable, Identifiable {
         switch self {
         case .quota: "额度"
         case .models: "模型推荐"
+        case .relay: "中继"
         }
     }
 
@@ -27,6 +29,7 @@ enum IslandTab: String, CaseIterable, Identifiable {
         switch self {
         case .quota: "gauge.with.dots.needle.33percent"
         case .models: "brain.head.profile"
+        case .relay: "network"
         }
     }
 }
@@ -53,19 +56,30 @@ final class IslandViewModel: ObservableObject {
     @Published var modelIntelligence: ModelIntelligenceSnapshot?
     @Published var modelIntelligenceError: String?
     @Published var isRefreshingModelIntelligence = false
+    @Published var relayConfigurationDraft = ""
+    @Published var isRelayConfigured = false
+    @Published var relayStatusDetail = "尚未配置公网中继"
+    @Published var relayConfigurationError: String?
 
     var headerTitle: String {
         if let delivery = latestDelivery {
             if let eta = delivery.etaText {
-                return "\(delivery.provider.displayName) · \(eta)送达"
+                return "\(delivery.providerDisplayName) · \(eta)送达"
             }
-            return "\(delivery.provider.displayName) · \(delivery.stage.displayName)"
+            return "\(delivery.providerDisplayName) · \(delivery.stage.displayName)"
         }
-        guard expanded, selectedTab == .models else { return statusTitle }
-        if let strongest = modelIntelligence?.strongest {
-            return "推荐 \(shortModelName(strongest)) · IQ \(formatScore(strongest.score))"
+        guard expanded else { return statusTitle }
+        switch selectedTab {
+        case .quota:
+            return statusTitle
+        case .models:
+            if let strongest = modelIntelligence?.strongest {
+                return "推荐 \(shortModelName(strongest)) · IQ \(formatScore(strongest.score))"
+            }
+            return isRefreshingModelIntelligence ? "正在读取模型智力" : "模型推荐暂不可用"
+        case .relay:
+            return "公网中继配置"
         }
-        return isRefreshingModelIntelligence ? "正在读取模型智力" : "模型推荐暂不可用"
     }
 
     var refreshDetail: String {
@@ -80,11 +94,17 @@ final class IslandViewModel: ObservableObject {
             } else {
                 "点击刷新后重试"
             }
+        case .relay:
+            relayStatusDetail
         }
     }
 
     var isRefreshingSelectedTab: Bool {
-        selectedTab == .quota ? isRefreshingQuotas : isRefreshingModelIntelligence
+        switch selectedTab {
+        case .quota: isRefreshingQuotas
+        case .models: isRefreshingModelIntelligence
+        case .relay: false
+        }
     }
 
     func beginQuotaRefresh() {
@@ -137,6 +157,28 @@ final class IslandViewModel: ObservableObject {
         isRefreshingModelIntelligence = false
     }
 
+    func updateRelayConfiguration(
+        configured: Bool,
+        detail: String,
+        error: String? = nil,
+        json: String? = nil
+    ) {
+        isRelayConfigured = configured
+        relayStatusDetail = detail
+        relayConfigurationError = error
+        if let json {
+            relayConfigurationDraft = json
+        }
+    }
+
+    func relayConfigurationSaved() {
+        updateRelayConfiguration(configured: true, detail: "配置已保存，正在连接…")
+    }
+
+    func relayConfigurationSaveFailed(_ error: Error) {
+        relayConfigurationError = error.localizedDescription
+    }
+
     func apply(summary: NotificationImportSummary) {
         eventCount = summary.events.count
         sourceText = summary.sourceNames.joined(separator: "、")
@@ -145,7 +187,7 @@ final class IslandViewModel: ObservableObject {
         if let delivery = summary.latestDeliveryUpdate {
             latestDelivery = delivery
             deliverySourceText = "Android 通知日志"
-            statusTitle = "\(delivery.provider.displayName) · \(delivery.stage.displayName)"
+            statusTitle = "\(delivery.providerDisplayName) · \(delivery.stage.displayName)"
             latestText = deliveryDescription(delivery)
         } else {
             latestDelivery = nil
@@ -163,7 +205,7 @@ final class IslandViewModel: ObservableObject {
         }
         latestDelivery = update
         deliverySourceText = source
-        statusTitle = "\(update.provider.displayName) · \(update.stage.displayName)"
+        statusTitle = "\(update.providerDisplayName) · \(update.stage.displayName)"
         statusDetail = source
         latestText = deliveryDescription(update)
         selectedTab = .quota

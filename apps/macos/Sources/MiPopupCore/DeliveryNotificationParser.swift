@@ -3,11 +3,13 @@ import Foundation
 public enum DeliveryProvider: String, Codable, Sendable, Equatable {
     case meituan
     case taobaoInstant = "taobao_instant"
+    case custom
 
     public var displayName: String {
         switch self {
         case .meituan: "美团"
         case .taobaoInstant: "淘宝闪购"
+        case .custom: "自定义来源"
         }
     }
 }
@@ -59,6 +61,7 @@ public struct DeliveryUpdate: Codable, Sendable, Equatable {
     public let sourceEventKind: String
     public let capturedAt: Int64
     public let provider: DeliveryProvider
+    public let providerName: String?
     public let stage: DeliveryStage
     public let statusText: String
     public let etaText: String?
@@ -76,6 +79,7 @@ public struct DeliveryUpdate: Codable, Sendable, Equatable {
         case sourceEventKind
         case capturedAt
         case provider
+        case providerName
         case stage = "state"
         case statusText
         case etaText
@@ -94,6 +98,7 @@ public struct DeliveryUpdate: Codable, Sendable, Equatable {
         sourceEventKind: String,
         capturedAt: Int64,
         provider: DeliveryProvider,
+        providerName: String? = nil,
         stage: DeliveryStage,
         statusText: String,
         etaText: String?,
@@ -110,6 +115,7 @@ public struct DeliveryUpdate: Codable, Sendable, Equatable {
         self.sourceEventKind = sourceEventKind
         self.capturedAt = capturedAt
         self.provider = provider
+        self.providerName = providerName
         self.stage = stage
         self.statusText = statusText
         self.etaText = etaText
@@ -119,6 +125,15 @@ public struct DeliveryUpdate: Codable, Sendable, Equatable {
         self.confidence = confidence
         self.orderKey = orderKey
         self.sourcePackage = sourcePackage
+    }
+
+    public var providerDisplayName: String {
+        if provider == .custom,
+           let providerName = providerName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !providerName.isEmpty {
+            return providerName
+        }
+        return provider.displayName
     }
 }
 
@@ -227,11 +242,9 @@ public enum DeliveryNotificationParser {
         "在途",
     ]
 
-    // Only unknown is confirmed by the current fixture. Specific stages also require
-    // explicit food-delivery context until real notifications cover those transitions.
     private static let stageRules: [(DeliveryStage, [String])] = [
         (.cancelled, ["订单已取消", "订单取消", "已取消"]),
-        (.delivered, ["已送达", "配送完成", "订单已完成"]),
+        (.delivered, ["已送达", "配送完成", "订单已完成", "订单已存入智能柜", "已存入智能柜"]),
         (.arriving, ["即将送达", "即将到达", "马上送达", "快到了"]),
         (.delivering, ["骑手已取餐", "骑手已取货", "正在配送", "配送中", "送餐中", "正在送往"]),
         (.courierPickingUp, ["取货中", "取餐中", "骑手已到店", "骑手到店", "前往商家", "赶往商家"]),
@@ -245,13 +258,21 @@ public enum DeliveryNotificationParser {
     private static let deliveryContextTerms = [
         "外卖",
         "骑手",
+        "骑士",
         "送餐",
+        "送达",
+        "送货",
         "备餐",
         "取餐",
         "商家",
+        "智能柜",
+        "开柜",
+        "取件码",
+        "柜门号",
     ]
 
     private static let etaPatterns = [
+        #"(?:预计|约|大约)\s*(\d{1,2}[:：]\d{2}\s*[-~—–至]\s*\d{1,2}[:：]\d{2})\s*(?:送达|到达)?"#,
         #"(?:预计|约|大约)\s*(\d{1,2}[:：]\d{2})\s*(?:送达|到达)?"#,
         #"(\d{1,2}[:：]\d{2})\s*(?:送达|到达)"#,
         #"(?:预计|还有|约)\s*(\d{1,3}\s*分钟)\s*(?:送达|到达)?"#,

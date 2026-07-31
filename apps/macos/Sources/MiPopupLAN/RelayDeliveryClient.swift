@@ -124,14 +124,33 @@ public final class RelayDeliveryClient {
     }
 
     private func ping(_ socket: URLSessionWebSocketTask) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            socket.sendPing { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume()
+        try await Self.awaitPing { completion in
+            socket.sendPing(pongReceiveHandler: completion)
+        }
+    }
+
+    nonisolated static func awaitPing(
+        _ send: @Sendable (@escaping @Sendable (Error?) -> Void) -> Void
+    ) async throws {
+        let completion = RelayPingContinuation()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<Void, Error>) in
+                completion.install(continuation)
+                guard !Task.isCancelled else {
+                    completion.resolve(.failure(CancellationError()))
+                    return
+                }
+                send { error in
+                    if let error {
+                        completion.resolve(.failure(error))
+                    } else {
+                        completion.resolve(.success(()))
+                    }
                 }
             }
+        } onCancel: {
+            completion.resolve(.failure(CancellationError()))
         }
     }
 
@@ -151,5 +170,49 @@ public final class RelayDeliveryClient {
 
     private static func shortError(_ error: Error) -> String {
         String(error.localizedDescription.prefix(160))
+    }
+}
+
+// Network transitions can deliver a late or repeated ping callback; a checked
+// continuation must still be resumed exactly once.
+private final class RelayPingContinuation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var pendingResult: Result<Void, Error>?
+    private var isResolved = false
+
+    func install(_ continuation: CheckedContinuation<Void, Error>) {
+        let result: Result<Void, Error>?
+        lock.lock()
+        if isResolved {
+            result = pendingResult
+            pendingResult = nil
+        } else {
+            self.continuation = continuation
+            result = nil
+        }
+        lock.unlock()
+        if let result {
+            continuation.resume(with: result)
+        }
+    }
+
+    @discardableResult
+    func resolve(_ result: Result<Void, Error>) -> Bool {
+        let continuation: CheckedContinuation<Void, Error>?
+        lock.lock()
+        guard !isResolved else {
+            lock.unlock()
+            return false
+        }
+        isResolved = true
+        continuation = self.continuation
+        self.continuation = nil
+        if continuation == nil {
+            pendingResult = result
+        }
+        lock.unlock()
+        continuation?.resume(with: result)
+        return true
     }
 }
