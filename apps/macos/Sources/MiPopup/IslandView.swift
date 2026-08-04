@@ -163,7 +163,7 @@ struct IslandView: View {
                     HStack(spacing: 0) {
                         Group {
                             if !model.expanded, let delivery = model.latestDelivery {
-                                collapsedDeliveryStatus(delivery)
+                                animatedCollapsedDeliveryStatus(delivery)
                             } else {
                                 statusContent(showTitle: model.expanded)
                             }
@@ -174,8 +174,9 @@ struct IslandView: View {
                             .frame(width: model.notchReservedWidth)
                         HStack(spacing: 7) {
                             if !model.expanded,
-                               let eta = model.latestDelivery?.etaText {
-                                collapsedDeliveryETA(eta)
+                               let delivery = model.latestDelivery,
+                               delivery.etaText != nil {
+                                animatedCollapsedDeliveryETA(delivery)
                             }
                             Image(systemName: model.expanded ? "chevron.up" : "chevron.down")
                                 .font(.system(size: 10, weight: .bold))
@@ -187,14 +188,15 @@ struct IslandView: View {
                 } else {
                     HStack(spacing: 10) {
                         if !model.expanded, let delivery = model.latestDelivery {
-                            collapsedDeliveryStatus(delivery)
+                            animatedCollapsedDeliveryStatus(delivery)
                         } else {
                             statusContent(showTitle: true)
                         }
                         Spacer(minLength: 4)
                         if !model.expanded,
-                           let eta = model.latestDelivery?.etaText {
-                            collapsedDeliveryETA(eta)
+                           let delivery = model.latestDelivery,
+                           delivery.etaText != nil {
+                            animatedCollapsedDeliveryETA(delivery)
                         }
                         Image(systemName: model.expanded ? "chevron.up" : "chevron.down")
                             .font(.system(size: 10, weight: .bold))
@@ -207,6 +209,28 @@ struct IslandView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private func animatedCollapsedDeliveryStatus(_ delivery: DeliveryUpdate) -> some View {
+        ZStack(alignment: .leading) {
+            collapsedDeliveryStatus(delivery)
+                .id(collapsedDeliveryMessageID(delivery))
+                .transition(collapsedDeliveryMessageTransition)
+        }
+        .animation(collapsedDeliveryMessageAnimation, value: collapsedDeliveryMessageID(delivery))
+        .clipped()
+    }
+
+    private func animatedCollapsedDeliveryETA(_ delivery: DeliveryUpdate) -> some View {
+        ZStack(alignment: .trailing) {
+            if let eta = delivery.etaText {
+                collapsedDeliveryETA(eta)
+                    .id(collapsedDeliveryMessageID(delivery))
+                    .transition(collapsedDeliveryMessageTransition)
+            }
+        }
+        .animation(collapsedDeliveryMessageAnimation, value: collapsedDeliveryMessageID(delivery))
+        .clipped()
     }
 
     private func collapsedDeliveryStatus(_ delivery: DeliveryUpdate) -> some View {
@@ -233,6 +257,26 @@ struct IslandView: View {
 
     private func deliveryETAText(_ eta: String) -> String {
         eta.contains("送达") ? eta : "\(eta)送达"
+    }
+
+    private func collapsedDeliveryMessageID(_ delivery: DeliveryUpdate) -> String {
+        [
+            delivery.eventId,
+            delivery.providerDisplayName,
+            delivery.stage.displayName,
+            delivery.etaText ?? "",
+        ].joined(separator: "|")
+    }
+
+    private var collapsedDeliveryMessageTransition: AnyTransition {
+        .asymmetric(
+            insertion: .move(edge: .top).combined(with: .opacity),
+            removal: .move(edge: .bottom).combined(with: .opacity)
+        )
+    }
+
+    private var collapsedDeliveryMessageAnimation: Animation {
+        .easeInOut(duration: 0.28)
     }
 
     private func statusContent(showTitle: Bool) -> some View {
