@@ -1,3 +1,0 @@
-2b3dc2dfe1b0e8bb755733d805d6628b0bf85b45c49934dd1969bc4c740f5803  MiPopupCapture-0.1.0-debug.apk
-cfc4689cec6c86d4d16babe290589cd427adfc0078626ce7db895a0ebf737ca3  MiPopup-0.1.0-arm64.pkg
-000937220d5a1bb2a240874b9ed20ad5403a60f498b725f05e0d00ad5917f1e5  MiPopup-Android-0.1.5-network-test-debug.apk
