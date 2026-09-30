@@ -19,6 +19,42 @@ final class NotchPanelController: NSWindowController {
     private var modelIntelligenceRefreshLoop: Task<Void, Never>?
     private var immediateRefreshTask: Task<Void, Never>?
     private var hoverCollapseTask: Task<Void, Never>?
+    private var hoverExpandTask: Task<Void, Never>?
+    var position: IslandPosition { model.position }
+    var activation: IslandActivation { model.activation }
+    private var settingsReturnTab = IslandTab.quota
+    private var customCenterFraction = UserDefaults.standard.object(forKey: "island.customCenterFraction") as? Double ?? 0.3
+    private var customScreenID = UserDefaults.standard.object(forKey: "island.customScreenID") as? UInt32
+    private var commandDrag: (pointerX: CGFloat, centerX: CGFloat, screen: NSScreen)?
+    private var layoutScreen: NSScreen?
+    nonisolated(unsafe) private var commandDragMonitor: Any?
+    var density: IslandDensity { model.density }
+
+    func setDensity(_ value: IslandDensity) {
+        model.density = value
+        UserDefaults.standard.set(value.rawValue, forKey: "island.density")
+        resetHoverAndReposition()
+    }
+
+    func setPosition(_ value: IslandPosition) {
+        model.position = value
+        UserDefaults.standard.set(value.rawValue, forKey: "island.position")
+        resetHoverAndReposition()
+    }
+
+    func setActivation(_ value: IslandActivation) {
+        model.activation = value
+        UserDefaults.standard.set(value.rawValue, forKey: "island.activation")
+        hoverExpandTask?.cancel()
+        hoverExpandTask = nil
+    }
+
+    private func resetHoverAndReposition() {
+        hoverExpandTask?.cancel()
+        hoverExpandTask = nil
+        isPointerInside = false
+        reposition()
+    }
     private var manualCollapseReleaseTask: Task<Void, Never>?
     private var fullscreenVisibilityTask: Task<Void, Never>?
     private var fullscreenProbeTask: Task<Void, Never>?
@@ -52,11 +88,13 @@ final class NotchPanelController: NSWindowController {
         modelIntelligenceRefreshLoop?.cancel()
         immediateRefreshTask?.cancel()
         hoverCollapseTask?.cancel()
+        hoverExpandTask?.cancel()
         manualCollapseReleaseTask?.cancel()
         fullscreenVisibilityTask?.cancel()
         fullscreenProbeTask?.cancel()
         fullscreenRestoreTask?.cancel()
         frameDisplayLink?.invalidate()
+        if let commandDragMonitor { NSEvent.removeMonitor(commandDragMonitor) }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
@@ -109,10 +147,22 @@ final class NotchPanelController: NSWindowController {
     }
 
     func showRelayConfiguration() {
-        model.selectedTab = .relay
+        showSettings()
+    }
+
+    private func showSettings() {
+        if model.selectedTab != .settings { settingsReturnTab = model.selectedTab }
+        hoverCollapseTask?.cancel()
+        hoverExpandTask?.cancel()
+        model.selectedTab = .settings
         model.expanded = true
         resize(animated: true)
         show()
+    }
+
+    private func closeSettings() {
+        model.selectedTab = settingsReturnTab
+        resize(animated: true)
     }
 
     func updateRelayConfiguration(
@@ -185,6 +235,8 @@ final class NotchPanelController: NSWindowController {
     }
 
     private func hideForFullscreen() {
+        hoverExpandTask?.cancel()
+        hoverExpandTask = nil
         fullscreenRestoreTask?.cancel()
         fullscreenRestoreTask = nil
         guard !isHiddenForFullscreen else { return }
@@ -251,13 +303,21 @@ final class NotchPanelController: NSWindowController {
                 await self.loadQuotas()
             case .models:
                 await self.loadModelIntelligence()
-            case .relay:
+            case .settings:
                 return
             }
         }
     }
 
     private func configure(_ panel: NSPanel) {
+        // Intercept before AppKit/SwiftUI starts button or nonactivating-window tracking.
+        commandDragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            let consumed = MainActor.assumeIsolated {
+                guard let self else { return false }
+                return self.handleCommandDragEvent(event) == nil
+            }
+            return consumed ? nil : event
+        }
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
@@ -279,6 +339,11 @@ final class NotchPanelController: NSWindowController {
             onHoverChange: { [weak self] isInside in self?.handleHover(isInside) },
             onTabChange: { [weak self] _ in self?.resize(animated: true) },
             onRefresh: { [weak self] in self?.refreshQuotas() },
+            onSettings: { [weak self] in self?.showSettings() },
+            onCloseSettings: { [weak self] in self?.closeSettings() },
+            onDensityChange: { [weak self] in self?.setDensity($0) },
+            onPositionChange: { [weak self] in self?.setPosition($0) },
+            onActivationChange: { [weak self] in self?.setActivation($0) },
             onImport: { [weak self] in self?.onImportRequest?() },
             onSaveRelayConfiguration: { [weak self] json in self?.saveRelayConfiguration(json) },
             onDismissDelivery: { [weak self] in self?.dismissCurrentDelivery() },
@@ -295,10 +360,12 @@ final class NotchPanelController: NSWindowController {
         panel.contentView = container
         islandContainerView = container
         islandHostingView = hostingView
-        container.setIslandFrame(container.bounds, cornerRadius: 19)
+        container.setIslandFrame(container.bounds, cornerRadius: model.islandCornerRadius, continuousCorners: model.expanded)
     }
 
     private func toggleExpanded() {
+        hoverExpandTask?.cancel()
+        hoverExpandTask = nil
         hoverCollapseTask?.cancel()
         hoverCollapseTask = nil
         manualCollapseReleaseTask?.cancel()
@@ -325,14 +392,25 @@ final class NotchPanelController: NSWindowController {
     }
 
     private func handleHover(_ isInside: Bool) {
+        guard commandDrag == nil else { return }
         isPointerInside = isInside
+        hoverExpandTask?.cancel()
+        hoverExpandTask = nil
         hoverCollapseTask?.cancel()
         hoverCollapseTask = nil
 
         if isInside {
-            guard !isManuallyCollapsedWhileHovered, !model.expanded else { return }
-            model.expanded = true
-            resize(animated: true)
+            guard !isManuallyCollapsedWhileHovered, !model.expanded,
+                  activation != .click, !isHiddenForFullscreen else { return }
+            let delay = activation.delay
+            hoverExpandTask = Task { [weak self] in
+                do { try await Task.sleep(for: delay) } catch { return }
+                guard let self, self.isPointerInside, !self.isHiddenForFullscreen,
+                      !self.isManuallyCollapsedWhileHovered, !self.model.expanded else { return }
+                self.model.expanded = true
+                self.resize(animated: true)
+                self.hoverExpandTask = nil
+            }
             return
         }
 
@@ -353,7 +431,8 @@ final class NotchPanelController: NSWindowController {
             } catch {
                 return
             }
-            guard let self, !self.isPointerInside, self.model.expanded else { return }
+            guard let self, !self.isPointerInside, self.model.expanded,
+                  self.model.selectedTab != .settings else { return }
             self.model.expanded = false
             self.resize(animated: true)
             self.hoverCollapseTask = nil
@@ -564,14 +643,20 @@ final class NotchPanelController: NSWindowController {
     private func setIslandContentSize(_ size: NSSize, backingScale: CGFloat) {
         guard let container = islandContainerView else { return }
         container.layoutSubtreeIfNeeded()
-        let frame = NotchGeometry.topAnchoredContentFrame(
+        var frame = NotchGeometry.topAnchoredContentFrame(
             containerSize: container.bounds.size,
             contentSize: size,
             backingScale: backingScale
         )
+        if let window, let screen = layoutScreen {
+            // Use the same screen anchor for every animation frame, including edge-clamped positions.
+            frame.origin.x = panelFrame(size: frame.size, screen: screen).minX - window.frame.minX
+        }
         container.setIslandFrame(
             frame,
-            cornerRadius: model.expanded ? 24 : 19
+            cornerRadius: model.islandCornerRadius,
+            joinRightEdge: !model.expanded && model.notchJoinOverlap > 0,
+            continuousCorners: model.expanded
         )
         islandHostingView?.needsLayout = true
         islandHostingView?.layoutSubtreeIfNeeded()
@@ -586,10 +671,18 @@ final class NotchPanelController: NSWindowController {
     }
 
     private func panelFrame(size: NSSize, screen: NSScreen) -> NSRect {
-        pixelAlignedFrame(
+        let area = horizontalArea(for: screen)
+        let desiredCenter: CGFloat
+        switch position {
+        case .center: desiredCenter = screen.frame.midX
+        case .left: desiredCenter = area.maxX - size.width / 2
+        case .custom: desiredCenter = screen.frame.minX + screen.frame.width * customCenterFraction
+        }
+        let x = NotchGeometry.horizontalOrigin(width: size.width, desiredCenter: desiredCenter, area: area)
+        return pixelAlignedFrame(
             width: size.width,
             height: size.height,
-            screenMidX: screen.frame.midX,
+            screenMidX: x + size.width / 2,
             screenTop: screen.frame.maxY,
             scale: screen.backingScaleFactor
         )
@@ -620,37 +713,145 @@ final class NotchPanelController: NSWindowController {
     }
 
     private func preferredScreen() -> NSScreen? {
-        NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+        if let commandDrag { return commandDrag.screen }
+        if position == .custom, let customScreenID,
+           let saved = NSScreen.screens.first(where: { screenID($0) == customScreenID }) {
+            return saved
+        }
+        return NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+    }
+
+    private func screenID(_ screen: NSScreen) -> UInt32? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+    }
+
+    private func horizontalArea(for screen: NSScreen) -> NSRect {
+        guard position != .center else { return screen.frame }
+        if position == .left {
+            return NotchGeometry.leftDockingArea(screenFrame: screen.frame, notchLeftEdge: screen.auxiliaryTopLeftArea?.maxX)
+        }
+        let insetFrame = screen.frame.insetBy(dx: 12, dy: 0)
+        let leftEdge = screen.auxiliaryTopLeftArea?.maxX ?? screen.frame.midX
+        if screen.auxiliaryTopLeftArea != nil && customCenterFraction <= 0.5 {
+            return NSRect(x: insetFrame.minX, y: screen.frame.minY,
+                          width: max(1, leftEdge - 8 - insetFrame.minX), height: screen.frame.height)
+        }
+        if let rightEdge = screen.auxiliaryTopRightArea?.minX {
+            return NSRect(x: rightEdge + 8, y: screen.frame.minY,
+                          width: max(1, insetFrame.maxX - rightEdge - 8), height: screen.frame.height)
+        }
+        return insetFrame
+    }
+
+    private func handleCommandDragEvent(_ event: NSEvent) -> NSEvent? {
+        if event.type == .leftMouseDown,
+           event.window === window,
+           event.modifierFlags.contains(.command),
+           beginCommandDrag(at: event.locationInWindow) {
+            return nil
+        }
+        guard commandDrag != nil else { return event }
+        switch event.type {
+        case .leftMouseDragged:
+            updateCommandDrag()
+            return nil
+        case .leftMouseUp:
+            endCommandDrag()
+            return nil
+        default:
+            return event
+        }
+    }
+
+    private func beginCommandDrag(at point: NSPoint) -> Bool {
+        guard let window, let container = islandContainerView, let screen = preferredScreen() else { return false }
+        let frame = container.islandFrame
+        guard frame.contains(point) else { return false }
+        hoverExpandTask?.cancel()
+        hoverCollapseTask?.cancel()
+        manualCollapseReleaseTask?.cancel()
+        stopFrameAnimation()
+        commandDrag = (NSEvent.mouseLocation.x, window.frame.minX + frame.midX, screen)
+        return true
+    }
+
+    private func updateCommandDrag() {
+        guard let drag = commandDrag else { return }
+        let delta = NSEvent.mouseLocation.x - drag.pointerX
+        guard abs(delta) >= 3 || position == .custom else { return }
+        customCenterFraction = min(1, max(0, (drag.centerX + delta - drag.screen.frame.minX) / drag.screen.frame.width))
+        customScreenID = screenID(drag.screen)
+        model.position = .custom
+        reposition()
+    }
+
+    private func endCommandDrag() {
+        guard let drag = commandDrag else { return }
+        if position == .custom, let notchLeft = drag.screen.auxiliaryTopLeftArea?.maxX,
+           let window, abs(window.frame.maxX - notchLeft) <= 12 {
+            model.position = .left
+        }
+        reposition()
+        commandDrag = nil
+        UserDefaults.standard.set(position.rawValue, forKey: "island.position")
+        if position == .custom {
+            UserDefaults.standard.set(customCenterFraction, forKey: "island.customCenterFraction")
+            UserDefaults.standard.set(customScreenID, forKey: "island.customScreenID")
+        }
+        isPointerInside = window?.frame.contains(NSEvent.mouseLocation) == true
+        isManuallyCollapsedWhileHovered = !model.expanded && isPointerInside
+        if !isPointerInside, model.expanded { scheduleAutomaticCollapse() }
     }
 
     private func panelSize(for screen: NSScreen) -> NSSize {
+        layoutScreen = screen
         let reservedWidth = NotchGeometry.reservedWidth(
             leftAreaMaxX: screen.auxiliaryTopLeftArea?.maxX,
             rightAreaMinX: screen.auxiliaryTopRightArea?.minX
         )
-        model.notchReservedWidth = reservedWidth
+        model.notchReservedWidth = position == .center ? reservedWidth : 0
+        model.notchJoinOverlap = position == .left && reservedWidth > 0 ? NotchGeometry.notchJoinOverlap : 0
 
+        let fallbackHeight: CGFloat
+        switch model.density {
+        case .minimal: fallbackHeight = 24
+        case .compact: fallbackHeight = 28
+        case .full: fallbackHeight = Self.collapsedSize.height
+        }
         let collapsedHeight = NotchGeometry.collapsedHeight(
             safeAreaTop: screen.safeAreaInsets.top,
             hasPhysicalNotch: reservedWidth > 0,
-            fallbackHeight: Self.collapsedSize.height
+            fallbackHeight: fallbackHeight
         )
         if model.collapsedHeight != collapsedHeight {
             model.collapsedHeight = collapsedHeight
         }
 
-        let collapsedWidth = model.latestDelivery == nil ? Self.collapsedSize.width : 360
+        let collapsedWidth: CGFloat
+        let sideWidth: CGFloat
+        switch model.density {
+        case .minimal:
+            collapsedWidth = 72
+            sideWidth = 36
+        case .compact:
+            collapsedWidth = model.latestDelivery == nil ? 100 : 260
+            sideWidth = model.latestDelivery == nil ? 36 : 100
+        case .full:
+            collapsedWidth = model.latestDelivery == nil ? Self.collapsedSize.width : 360
+            sideWidth = model.latestDelivery == nil ? 46 : 126
+        }
         let collapsedSize = NSSize(width: collapsedWidth, height: collapsedHeight)
         let baseSize = model.expanded ? expandedSize : collapsedSize
         let visibleWidthPerSide: CGFloat = model.expanded
             ? 150
-            : (model.latestDelivery == nil ? 46 : 126)
+            : sideWidth
+        let availableWidth = horizontalArea(for: screen).width
         return NSSize(
-            width: NotchGeometry.panelWidth(
+            width: min(availableWidth, NotchGeometry.panelWidth(
                 baseWidth: baseSize.width,
-                reservedWidth: reservedWidth,
+                reservedWidth: model.notchReservedWidth,
                 visibleWidthPerSide: visibleWidthPerSide
-            ),
+            )),
             height: baseSize.height
         )
     }
@@ -664,8 +865,8 @@ final class NotchPanelController: NSWindowController {
                 + (model.eventCount == 0 ? 0 : 18)
         case .models:
             height = 334
-        case .relay:
-            height = 352
+        case .settings:
+            height = 450
         }
         return NSSize(width: 470, height: height)
     }
@@ -685,6 +886,7 @@ private struct PanelFrameAnimation {
 
 private final class IslandHostingContainerView: NSView {
     private let backdrop = NSView()
+    private let backdropMask = CAShapeLayer()
     private weak var hostedView: NSView?
     private(set) var islandFrame = NSRect.zero
 
@@ -695,9 +897,7 @@ private final class IslandHostingContainerView: NSView {
 
         backdrop.wantsLayer = true
         backdrop.layer?.backgroundColor = NSColor.black.cgColor
-        backdrop.layer?.cornerCurve = .continuous
-        backdrop.layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
-        backdrop.layer?.masksToBounds = true
+        backdrop.layer?.mask = backdropMask
         addSubview(backdrop)
     }
 
@@ -711,10 +911,21 @@ private final class IslandHostingContainerView: NSView {
         addSubview(view, positioned: .above, relativeTo: backdrop)
     }
 
-    func setIslandFrame(_ frame: NSRect, cornerRadius: CGFloat) {
+    func setIslandFrame(_ frame: NSRect, cornerRadius: CGFloat, joinRightEdge: Bool = false, continuousCorners: Bool = true) {
         islandFrame = frame
         backdrop.frame = frame
-        backdrop.layer?.cornerRadius = cornerRadius
+        let outline = IslandOutline(
+            cornerRadius: cornerRadius,
+            joinRightEdge: joinRightEdge,
+            continuousCorners: continuousCorners
+        ).path(in: CGRect(origin: .zero, size: frame.size))
+        // SwiftUI paths use top-down coordinates; this AppKit layer is bottom-up.
+        let transform = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: frame.height)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        backdropMask.frame = backdrop.bounds
+        backdropMask.path = outline.applying(transform).cgPath
+        CATransaction.commit()
         hostedView?.frame = frame
     }
 

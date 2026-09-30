@@ -59,6 +59,50 @@ struct NotificationLogImporterTests {
     }
 
     @Test
+    func leftDockedAnimationKeepsTopAndLeftEdgesFixed() {
+        for size in [CGSize(width: 72, height: 32), CGSize(width: 260, height: 150), CGSize(width: 470, height: 334)] {
+            let frame = NotchGeometry.topAnchoredContentFrame(
+                containerSize: CGSize(width: 470, height: 334),
+                contentSize: size,
+                backingScale: 2,
+                alignLeft: true
+            )
+            #expect(frame.minX == 0)
+            #expect(frame.maxY == 334)
+            #expect(frame.size == size)
+        }
+    }
+
+    @Test
+    func positionsIslandAgainstNotchLeftEdgeAndClampsCustomPlacement() {
+        let leftArea = CGRect(x: 12, y: 0, width: 630, height: 900)
+        for width: CGFloat in [100, 260, 470] {
+            let origin = NotchGeometry.horizontalOrigin(
+                width: width, desiredCenter: leftArea.maxX - width / 2, area: leftArea
+            )
+            #expect(origin + width == 642)
+        }
+        #expect(NotchGeometry.horizontalOrigin(width: 100, desiredCenter: 400, area: leftArea) == 350)
+        #expect(NotchGeometry.horizontalOrigin(width: 470, desiredCenter: 0, area: leftArea) == 12)
+        #expect(NotchGeometry.horizontalOrigin(width: 470, desiredCenter: 900, area: leftArea) == 172)
+        let rightScreen = CGRect(x: -1500, y: 0, width: 1400, height: 900)
+        #expect(NotchGeometry.horizontalOrigin(width: 100, desiredCenter: -800, area: rightScreen) == -850)
+    }
+
+    @Test
+    func leftDockOverlapsPhysicalNotchWithoutLeavingASeam() {
+        let screen = CGRect(x: -1500, y: 0, width: 1500, height: 900)
+        let area = NotchGeometry.leftDockingArea(screenFrame: screen, notchLeftEdge: -850)
+        #expect(area.maxX == -834)
+        for width: CGFloat in [100, 260, 470] {
+            let x = NotchGeometry.horizontalOrigin(width: width, desiredCenter: area.maxX - width / 2, area: area)
+            #expect(x + width == -850 + NotchGeometry.notchJoinOverlap)
+        }
+        let withoutNotch = NotchGeometry.leftDockingArea(screenFrame: screen, notchLeftEdge: nil)
+        #expect(withoutNotch.maxX == screen.midX)
+    }
+
+    @Test
     func importsValidLinesAndSkipsMalformedLines() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

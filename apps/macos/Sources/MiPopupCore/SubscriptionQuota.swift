@@ -46,6 +46,22 @@ public struct SubscriptionQuotaSnapshot: Sendable, Equatable, Codable {
         self.windows = windows
         self.fetchedAt = fetchedAt
     }
+
+    public var windowsForDisplay: [SubscriptionQuotaWindow] {
+        windows.enumerated().sorted { lhs, rhs in
+            let lhsPriority = Self.displayPriority(for: lhs.element.label)
+            let rhsPriority = Self.displayPriority(for: rhs.element.label)
+            return lhsPriority == rhsPriority
+                ? lhs.offset < rhs.offset
+                : lhsPriority < rhsPriority
+        }.map(\.element)
+    }
+
+    private static func displayPriority(for label: String) -> Int {
+        if label.contains("5 小时") { return 0 }
+        if label.contains("每周") { return 1 }
+        return 2
+    }
 }
 
 public enum SubscriptionQuotaParseError: LocalizedError, Equatable {

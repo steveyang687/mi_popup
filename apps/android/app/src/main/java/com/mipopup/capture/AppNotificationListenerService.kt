@@ -38,6 +38,7 @@ class AppNotificationListenerService : NotificationListenerService() {
 
     override fun onCreate() {
         super.onCreate()
+        runCatching { BundledRelayConfiguration.installIfNeeded(applicationContext) }
         outbox = LanOutboxStore(File(filesDir, LanOutboxStore.DIRECTORY_NAME))
         relayOutbox = LanOutboxStore(File(filesDir, RelayProtocol.OUTBOX_DIRECTORY_NAME))
         identityStore = LanIdentityStore(applicationContext)

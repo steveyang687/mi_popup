@@ -9,6 +9,11 @@ struct IslandView: View {
     let onHoverChange: (Bool) -> Void
     let onTabChange: (IslandTab) -> Void
     let onRefresh: () -> Void
+    let onSettings: () -> Void
+    let onCloseSettings: () -> Void
+    let onDensityChange: (IslandDensity) -> Void
+    let onPositionChange: (IslandPosition) -> Void
+    let onActivationChange: (IslandActivation) -> Void
     let onImport: () -> Void
     let onSaveRelayConfiguration: (String) -> Void
     let onDismissDelivery: () -> Void
@@ -22,7 +27,20 @@ struct IslandView: View {
             if model.expanded {
                 Divider().overlay(Color.white.opacity(0.1))
                 VStack(alignment: .leading, spacing: 8) {
-                    tabBar
+                    if model.selectedTab == .settings {
+                        HStack {
+                            Button(action: onCloseSettings) {
+                                Label("返回", systemImage: "chevron.left")
+                            }
+                            .buttonStyle(RelayConfigurationButtonStyle())
+                            Spacer()
+                            Text("设置").font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(height: 28)
+                    } else {
+                        tabBar
+                    }
 
                     Group {
                         switch model.selectedTab {
@@ -30,8 +48,8 @@ struct IslandView: View {
                             quotaContent
                         case .models:
                             modelIntelligenceContent
-                        case .relay:
-                            relayConfigurationContent
+                        case .settings:
+                            settingsContent
                         }
                     }
 
@@ -46,7 +64,7 @@ struct IslandView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(islandBackground)
         .clipShape(islandShape)
-        .overlay(islandShape.stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .overlay(islandShape.stroke(Color.white.opacity(!model.expanded && model.notchJoinOverlap > 0 ? 0 : 0.08), lineWidth: 1))
         .animation(.spring(response: 0.3, dampingFraction: 0.86), value: model.expanded)
         .onHover(perform: onHoverChange)
         .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil) { providers in
@@ -64,6 +82,46 @@ struct IslandView: View {
             }
             return true
         }
+    }
+
+    private var settingsContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(spacing: 10) {
+                    Picker("收起时显示", selection: Binding(get: { model.density }, set: { onDensityChange($0) })) {
+                        ForEach(IslandDensity.allCases, id: \.self) { value in
+                            Text(value.title).tag(value)
+                        }
+                    }
+                    Picker("显示位置", selection: Binding(get: { model.position }, set: { onPositionChange($0) })) {
+                        ForEach(IslandPosition.allCases, id: \.self) { value in
+                            Text(value.title).tag(value)
+                        }
+                    }
+                    Picker("展开方式", selection: Binding(get: { model.activation }, set: { onActivationChange($0) })) {
+                        ForEach(IslandActivation.allCases, id: \.self) { value in
+                            Text(value.title).tag(value)
+                        }
+                    }
+                    Text("按住 Command 拖动岛内任意位置可调整横向位置，松手后自动保存。")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .pickerStyle(.menu)
+                .font(.system(size: 11))
+                .padding(10)
+                .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 11))
+
+                Text("公网中继")
+                    .font(.system(size: 12, weight: .semibold))
+                relayConfigurationContent
+            }
+            .foregroundStyle(.white.opacity(0.85))
+            .padding(.trailing, 4)
+        }
+        .frame(height: 316)
+        .environment(\.colorScheme, .dark)
     }
 
     private var relayConfigurationContent: some View {
@@ -162,7 +220,7 @@ struct IslandView: View {
                 if model.notchReservedWidth > 0 {
                     HStack(spacing: 0) {
                         Group {
-                            if !model.expanded, let delivery = model.latestDelivery {
+                            if !model.expanded, model.density != .minimal, let delivery = model.latestDelivery {
                                 animatedCollapsedDeliveryStatus(delivery)
                             } else {
                                 statusContent(showTitle: model.expanded)
@@ -174,6 +232,7 @@ struct IslandView: View {
                             .frame(width: model.notchReservedWidth)
                         HStack(spacing: 7) {
                             if !model.expanded,
+                               model.density != .minimal,
                                let delivery = model.latestDelivery,
                                delivery.etaText != nil {
                                 animatedCollapsedDeliveryETA(delivery)
@@ -187,13 +246,14 @@ struct IslandView: View {
                     }
                 } else {
                     HStack(spacing: 10) {
-                        if !model.expanded, let delivery = model.latestDelivery {
+                        if !model.expanded, model.density != .minimal, let delivery = model.latestDelivery {
                             animatedCollapsedDeliveryStatus(delivery)
                         } else {
-                            statusContent(showTitle: true)
+                            statusContent(showTitle: model.expanded || model.density == .full)
                         }
                         Spacer(minLength: 4)
                         if !model.expanded,
+                           model.density != .minimal,
                            let delivery = model.latestDelivery,
                            delivery.etaText != nil {
                             animatedCollapsedDeliveryETA(delivery)
@@ -202,7 +262,8 @@ struct IslandView: View {
                             .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(.white.opacity(0.55))
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.leading, 16)
+                    .padding(.trailing, 16 + model.notchJoinOverlap)
                 }
             }
             .frame(height: model.expanded ? 38 : model.collapsedHeight)
@@ -239,7 +300,7 @@ struct IslandView: View {
                 .fill(Color.orange)
                 .frame(width: 8, height: 8)
                 .shadow(color: Color.orange.opacity(0.7), radius: 5)
-            Text("\(delivery.providerDisplayName) · \(delivery.stage.displayName)")
+            Text(model.density == .compact ? delivery.stage.displayName : "\(delivery.providerDisplayName) · \(delivery.stage.displayName)")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.white)
                 .lineLimit(1)
@@ -300,7 +361,7 @@ struct IslandView: View {
 
     private var tabBar: some View {
         HStack(spacing: 4) {
-            ForEach(IslandTab.allCases) { tab in
+            ForEach([IslandTab.quota, .models]) { tab in
                 Button {
                     model.selectedTab = tab
                     onTabChange(tab)
@@ -563,7 +624,19 @@ struct IslandView: View {
                 Text(model.refreshDetail)
             }
             Spacer(minLength: 4)
-            if model.selectedTab != .relay {
+            Button(action: onSettings) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .frame(width: 26, height: 26)
+                    .background(Color.white.opacity(model.selectedTab == .settings ? 0.16 : 0.08), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("设置显示、交互与公网中继")
+            .accessibilityLabel("设置")
+
+            if model.selectedTab != .settings {
                 Button(action: onRefresh) {
                     HStack(spacing: 5) {
                         Image(systemName: "arrow.clockwise")
@@ -635,7 +708,7 @@ struct IslandView: View {
             }
 
             if let snapshot = state.snapshot {
-                ForEach(Array(snapshot.windows.prefix(4))) { window in
+                ForEach(Array(snapshot.windowsForDisplay.prefix(4))) { window in
                     quotaWindow(window)
                 }
                 if state.errorMessage != nil {
@@ -738,19 +811,17 @@ struct IslandView: View {
         return formatter.string(from: date)
     }
 
-    private var islandShape: UnevenRoundedRectangle {
-        UnevenRoundedRectangle(
-            topLeadingRadius: 0,
-            bottomLeadingRadius: model.expanded ? 24 : 19,
-            bottomTrailingRadius: model.expanded ? 24 : 19,
-            topTrailingRadius: 0,
-            style: .continuous
+    private var islandShape: IslandOutline {
+        IslandOutline(
+            cornerRadius: model.islandCornerRadius,
+            joinRightEdge: !model.expanded && model.notchJoinOverlap > 0,
+            continuousCorners: model.expanded
         )
     }
 
     private var islandBackground: some View {
         LinearGradient(
-            colors: [Color.black, Color(red: 0.055, green: 0.059, blue: 0.07)],
+            colors: [Color.black, !model.expanded && model.notchJoinOverlap > 0 ? Color.black : Color(red: 0.055, green: 0.059, blue: 0.07)],
             startPoint: .top,
             endPoint: .bottom
         )

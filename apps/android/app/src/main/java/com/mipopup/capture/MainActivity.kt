@@ -8,6 +8,8 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
@@ -28,6 +30,8 @@ import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
     private val worker = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var activeScanRetry: Runnable? = null
     private lateinit var statusText: TextView
     private lateinit var previewText: TextView
     private lateinit var packageEditor: EditText
@@ -36,6 +40,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        runCatching { BundledRelayConfiguration.installIfNeeded(applicationContext) }
         setContentView(buildContent())
     }
 
@@ -45,6 +50,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        cancelActiveScanRetry()
         worker.shutdown()
         super.onDestroy()
     }
@@ -58,6 +64,8 @@ class MainActivity : Activity() {
     }
 
     private fun buildContent(): ScrollView {
+        if (BuildConfig.USER_FACING) return buildUserContent()
+
         val scroll = ScrollView(this).apply { setBackgroundColor(Color.rgb(16, 17, 20)) }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -221,7 +229,66 @@ class MainActivity : Activity() {
         return scroll
     }
 
+    private fun buildUserContent(): ScrollView {
+        val scroll = ScrollView(this).apply { setBackgroundColor(Color.rgb(16, 17, 20)) }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(28), dp(20), dp(28))
+        }
+        scroll.addView(content)
+
+        content.addView(label("MiPopup 配送同步", 26f, true, Color.WHITE))
+        content.addView(label(
+            "自动将支持的外卖配送状态同步到 Mac。同一局域网内优先直连，其他网络使用端到端加密中继。",
+            14f,
+            false,
+            Color.LTGRAY
+        ).withMargin(top = 8))
+
+        statusText = label("正在读取同步状态…", 15f, false, Color.WHITE)
+        content.addView(card(statusText).withMargin(top = 20))
+
+        content.addView(button("开启通知读取权限") {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        }.withMargin(top = 16))
+
+        content.addView(button("立即检查配送状态") {
+            scanActiveNotifications()
+        }.withMargin(top = 8))
+
+        content.addView(button("允许锁屏后台同步") {
+            requestLockScreenSyncPermission()
+        }.withMargin(top = 8))
+
+        content.addView(button("打开系统应用设置") {
+            startActivity(Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:$packageName")
+            ))
+        }.withMargin(top = 8))
+
+        content.addView(label(
+            "如使用 HyperOS，请同时允许 MiPopup 自启动，并将电量策略设为“无限制”。",
+            12f,
+            false,
+            Color.GRAY
+        ).withMargin(top = 12))
+
+        content.addView(label(
+            "MiPopup 只传输解析后的配送状态和预计时间，不传输完整通知正文。",
+            12f,
+            false,
+            Color.GRAY
+        ).withMargin(top = 20))
+        return scroll
+    }
+
     private fun refresh() {
+        if (BuildConfig.USER_FACING) {
+            refreshUserStatus()
+            return
+        }
+
         val enabled = isListenerEnabled()
         val lockScreenSyncAllowed = isIgnoringBatteryOptimizations()
         val activeScan = AppNotificationListenerService.lastActiveScanResult()
@@ -280,14 +347,54 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun refreshUserStatus() {
+        val enabled = isListenerEnabled()
+        val lockScreenSyncAllowed = isIgnoringBatteryOptimizations()
+        worker.execute {
+            val lanSync = LanSyncMonitor.snapshot()
+            val relaySync = RelaySyncMonitor.snapshot()
+            val relayConfigured = RelaySettings(this).load() != null
+            runOnUiThread {
+                statusText.text = buildString {
+                    append(if (enabled) "● 通知读取已开启" else "○ 需要开启通知读取权限")
+                    append("\n局域网同步：${formatLanPhase(lanSync.phase)}")
+                    append("\n公网同步：${if (relayConfigured) formatRelayPhase(relaySync.phase) else "配置不可用"}")
+                    append(if (lockScreenSyncAllowed) "\n后台运行：已允许" else "\n后台运行：受系统省电限制")
+                }
+                statusText.setTextColor(
+                    if (enabled && relayConfigured) Color.rgb(112, 220, 146)
+                    else Color.rgb(255, 184, 108)
+                )
+            }
+        }
+    }
+
     private fun scanActiveNotifications() {
+        cancelActiveScanRetry()
+        scanActiveNotifications(attempt = 0)
+    }
+
+    private fun scanActiveNotifications(attempt: Int) {
         val result = AppNotificationListenerService.requestActiveSnapshot()
         if (result == null) {
-            NotificationListenerService.requestRebind(listenerComponent())
-            toast("监听服务尚未连接，已请求重连；请稍后再扫描")
+            if (attempt == 0) {
+                NotificationListenerService.requestRebind(listenerComponent())
+                toast("监听服务尚未连接，正在重连并自动重试扫描")
+            }
+            if (attempt < ACTIVE_SCAN_RETRY_DELAYS_MILLIS.size) {
+                val retry = Runnable {
+                    activeScanRetry = null
+                    scanActiveNotifications(attempt + 1)
+                }
+                activeScanRetry = retry
+                mainHandler.postDelayed(retry, ACTIVE_SCAN_RETRY_DELAYS_MILLIS[attempt])
+            } else {
+                toast("监听服务仍未连接；请检查通知使用权、自启动和电量策略")
+            }
             return
         }
 
+        cancelActiveScanRetry()
         val message = when {
             result.errorMessage != null -> "扫描失败：${result.errorMessage}"
             result.targetCount == 0 -> "系统返回 ${result.totalCount} 条活动通知；可从状态卡复制来源包名"
@@ -296,6 +403,11 @@ class MainActivity : Activity() {
         }
         toast(message)
         statusText.postDelayed({ refresh() }, 500)
+    }
+
+    private fun cancelActiveScanRetry() {
+        activeScanRetry?.let(mainHandler::removeCallbacks)
+        activeScanRetry = null
     }
 
     private fun saveRelayConfiguration() {
@@ -481,5 +593,6 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQUEST_EXPORT = 2001
+        private val ACTIVE_SCAN_RETRY_DELAYS_MILLIS = longArrayOf(600, 1_200, 2_400)
     }
 }

@@ -3,7 +3,7 @@ import MiPopupCore
 import MiPopupLAN
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var panelController: NotchPanelController?
     private var localDeliveryServer: LocalDeliveryServer?
     private var relayDeliveryClient: RelayDeliveryClient?
@@ -61,10 +61,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "导入 Android 日志…", action: #selector(chooseLogFile), keyEquivalent: "o"))
         menu.addItem(NSMenuItem(title: "配置公网中继…", action: #selector(showRelayConfiguration), keyEquivalent: ","))
         menu.addItem(.separator())
+        addPreferenceMenu("收起时显示", options: IslandDensity.allCases.map { ($0.title, $0.rawValue) }, action: #selector(changeDensity(_:)), to: menu)
+        addPreferenceMenu("显示位置", options: IslandPosition.allCases.map { ($0.title, $0.rawValue) }, action: #selector(changePosition(_:)), to: menu)
+        addPreferenceMenu("展开方式", options: IslandActivation.allCases.map { ($0.title, $0.rawValue) }, action: #selector(changeActivation(_:)), to: menu)
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出 MiPopup", action: #selector(quit), keyEquivalent: "q"))
         menu.items.forEach { $0.target = self }
         item.menu = menu
         statusItem = item
+    }
+
+    private func addPreferenceMenu(_ title: String, options: [(String, String)], action: Selector, to menu: NSMenu) {
+        let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let submenu = NSMenu(title: title)
+        for (label, value) in options {
+            let item = NSMenuItem(title: label, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = value
+            submenu.addItem(item)
+        }
+        parent.submenu = submenu
+        menu.addItem(parent)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let value = menuItem.representedObject as? String
+        switch menuItem.action {
+        case #selector(changeDensity(_:)):
+            menuItem.state = value == panelController?.density.rawValue ? .on : .off
+        case #selector(changePosition(_:)):
+            menuItem.state = value == panelController?.position.rawValue ? .on : .off
+        case #selector(changeActivation(_:)):
+            menuItem.state = value == panelController?.activation.rawValue ? .on : .off
+        default: break
+        }
+        return true
+    }
+
+    @objc private func changeDensity(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let value = IslandDensity(rawValue: raw) else { return }
+        panelController?.setDensity(value)
+    }
+
+    @objc private func changePosition(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let value = IslandPosition(rawValue: raw) else { return }
+        panelController?.setPosition(value)
+    }
+
+    @objc private func changeActivation(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let value = IslandActivation(rawValue: raw) else { return }
+        panelController?.setActivation(value)
     }
 
     private func startRelayClient(using server: LocalDeliveryServer) {

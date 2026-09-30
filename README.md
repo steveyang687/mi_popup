@@ -66,7 +66,7 @@ Notchvisor utilizes and interacts with OpenAI Codex and GPT-5.6 in the following
 
 ### 2. Optional Personal Relay
 
-Generate credentials on a trusted Mac, upload only the server environment file, and deploy `services/relay/compose.yaml` on the VPS by following `services/relay/README.md`. Paste the local client JSON into Android. On macOS, open the island's **中继** tab (or choose **配置公网中继…** from the menu bar), paste the same JSON, and select **保存并连接**.
+Generate credentials on a trusted Mac, upload only the server environment file, and deploy `services/relay/compose.yaml` on the VPS by following `services/relay/README.md`. Paste the local client JSON into Android. On macOS, click the **设置** gear to the left of **刷新**, scroll to **公网中继** (or choose **配置公网中继…** from the menu bar), paste the same JSON, and select **保存并连接**. The settings page also provides collapsed display density, screen position, and hover/click activation preferences, which save automatically.
 
 ### 3. macOS Client Setup
 
@@ -89,6 +89,21 @@ export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
 export GRADLE_USER_HOME="$PWD/.gradle-user-home"
 ./gradlew test assembleDebug
 ```
+
+To build the simplified user-facing APK with a bundled personal Relay configuration, keep the
+client JSON outside the repository and pass only its path to Gradle:
+
+```bash
+MIPOPUP_RELAY_CONFIG_FILE="$HOME/Library/Application Support/MiPopup/relay-config.json" \
+  ./gradlew assembleUser
+```
+
+The output is `apps/android/app/build/outputs/apk/user/app-user.apk`. The user build hides log,
+parser, package, test-message, and Relay credential editors. It is locally debug-signed for direct
+installation and uses the same application ID as the debug-tools build, so it replaces that build.
+Bundling credentials hides them from the UI but cannot prevent extraction from a decompiled APK;
+only distribute this artifact to controlled devices and rotate the Relay token and content key if
+the APK leaves that boundary.
 
 ### macOS Build
 Requires Xcode 15+ (Swift 6 compatible toolchain):

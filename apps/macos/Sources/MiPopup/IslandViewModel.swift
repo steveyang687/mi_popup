@@ -13,7 +13,7 @@ struct ProviderQuotaDisplayState: Identifiable, Equatable {
 enum IslandTab: String, CaseIterable, Identifiable {
     case quota
     case models
-    case relay
+    case settings
 
     var id: Self { self }
 
@@ -21,7 +21,7 @@ enum IslandTab: String, CaseIterable, Identifiable {
         switch self {
         case .quota: "额度"
         case .models: "模型推荐"
-        case .relay: "中继"
+        case .settings: "设置"
         }
     }
 
@@ -29,13 +29,16 @@ enum IslandTab: String, CaseIterable, Identifiable {
         switch self {
         case .quota: "gauge.with.dots.needle.33percent"
         case .models: "brain.head.profile"
-        case .relay: "network"
+        case .settings: "gearshape"
         }
     }
 }
 
 @MainActor
 final class IslandViewModel: ObservableObject {
+    @Published var density = IslandDensity(rawValue: UserDefaults.standard.string(forKey: "island.density") ?? "") ?? .compact
+    @Published var position = IslandPosition(rawValue: UserDefaults.standard.string(forKey: "island.position") ?? "") ?? .center
+    @Published var activation = IslandActivation(rawValue: UserDefaults.standard.string(forKey: "island.activation") ?? "") ?? .hover
     @Published var expanded = false
     @Published var selectedTab = IslandTab.quota
     @Published var statusTitle = "正在读取 AI 额度"
@@ -47,7 +50,9 @@ final class IslandViewModel: ObservableObject {
     @Published var deliverySourceText = "Android 通知日志"
     @Published var hasError = false
     @Published var notchReservedWidth: CGFloat = 0
+    @Published var notchJoinOverlap: CGFloat = 0
     @Published var collapsedHeight: CGFloat = 38
+    var islandCornerRadius: CGFloat { expanded ? 24 : NotchGeometry.collapsedCornerRadius }
     @Published var quotaStates = SubscriptionProviderID.allCases.map {
         ProviderQuotaDisplayState(id: $0, snapshot: nil, errorMessage: nil, isLoading: true)
     }
@@ -77,8 +82,8 @@ final class IslandViewModel: ObservableObject {
                 return "推荐 \(shortModelName(strongest)) · IQ \(formatScore(strongest.score))"
             }
             return isRefreshingModelIntelligence ? "正在读取模型智力" : "模型推荐暂不可用"
-        case .relay:
-            return "公网中继配置"
+        case .settings:
+            return "设置"
         }
     }
 
@@ -94,8 +99,8 @@ final class IslandViewModel: ObservableObject {
             } else {
                 "点击刷新后重试"
             }
-        case .relay:
-            relayStatusDetail
+        case .settings:
+            "显示设置自动保存"
         }
     }
 
@@ -103,7 +108,7 @@ final class IslandViewModel: ObservableObject {
         switch selectedTab {
         case .quota: isRefreshingQuotas
         case .models: isRefreshingModelIntelligence
-        case .relay: false
+        case .settings: false
         }
     }
 

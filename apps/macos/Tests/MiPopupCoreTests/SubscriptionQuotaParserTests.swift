@@ -4,6 +4,33 @@ import Testing
 
 struct SubscriptionQuotaParserTests {
     @Test
+    func ordersFiveHourWindowBeforeWeeklyWindowForDisplay() {
+        let openAI = SubscriptionQuotaSnapshot(
+            provider: .openAI,
+            productName: "Codex",
+            planName: "ChatGPT Plus",
+            windows: [
+                SubscriptionQuotaWindow(id: "weekly", label: "每周", remainingPercent: 80, resetsAt: nil),
+                SubscriptionQuotaWindow(id: "session", label: "5 小时", remainingPercent: 90, resetsAt: nil),
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 100)
+        )
+        let google = SubscriptionQuotaSnapshot(
+            provider: .google,
+            productName: "Antigravity",
+            planName: "Google AI Pro",
+            windows: [
+                SubscriptionQuotaWindow(id: "weekly", label: "Gemini · 每周", remainingPercent: 80, resetsAt: nil),
+                SubscriptionQuotaWindow(id: "session", label: "Gemini · 5 小时", remainingPercent: 90, resetsAt: nil),
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 100)
+        )
+
+        #expect(openAI.windowsForDisplay.map(\.label) == ["5 小时", "每周"])
+        #expect(google.windowsForDisplay.map(\.label) == ["Gemini · 5 小时", "Gemini · 每周"])
+    }
+
+    @Test
     func parsesCodexSubscriptionWindow() throws {
         let data = Data(#"{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":20,"windowDurationMins":10080,"resetsAt":1784610708},"secondary":null,"planType":"plus"}}}"#.utf8)
         let fetchedAt = Date(timeIntervalSince1970: 100)
